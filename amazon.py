@@ -21,6 +21,17 @@ print("Parsing page data")
 page_content = page_request.text
 page = BeautifulSoup(page_content, "html.parser")
 print("Page data parsed")
+# Define the set of JSON keys to ignore in the product details
+IGNORED_KEYS = {
+    'ASIN',
+    'Customer Reviews',
+    'Best Sellers Rank',
+    'Date First Available'
+}
+IGNORED_KEYS = {k.lower() for k in IGNORED_KEYS}
+
+with open("website.html", "w", encoding="utf-8") as f:
+    f.write(page_content)
 
 
 ### * * FUNCTIONS HANDLING DIFFERENT IDS * * ###
@@ -31,8 +42,10 @@ def handle_table(id):
     prod_info_dict = {}
     for info in prod_info:
         key = info.find('th').text.strip()
-        value = info.find('td').text.strip().encode("ascii", "ignore").decode()
-        prod_info_dict[key] = value
+        # Only add the key-value pair if the key is not in the ignored set
+        if key.lower() not in IGNORED_KEYS:
+            value = info.find('td').text.strip().encode("ascii", "ignore").decode()
+            prod_info_dict[key] = value
     return prod_info_dict
 
 
@@ -53,17 +66,49 @@ def handle_alt_table(id):
 
 # * function handles list type listing (<ul>)
 def handle_list(id):
-    # the DIV wrapping the list can have slightly different names so I find any div matching the ID and then take the first unordered list
-    prod_info = page.find(id=id).find_all('ul')[0].find_all('li')
+    """Handles list type listing (<ul>) with improved key and value cleaning."""
+    # Find the parent div first
+    parent_div = page.find(id=id)
+
+    # Check if the parent div was found before proceeding
+    if not parent_div:
+        return {} # Return an empty dict if the element doesn't exist
+
+    prod_info = parent_div.find_all('ul')
+    if not prod_info:
+        return {} # Return empty if no <ul> is found inside
+
+    prod_info_list = prod_info[0].find_all('li')
     prod_info_dict = {}
-    for info in prod_info:
+
+    for info in prod_info_list:
         try:
-            key = info.span.contents[1].text.encode("ascii", "ignore").decode().strip()
-            value = info.span.contents[3].text.strip().encode("ascii", "ignore").decode()
-            prod_info_dict[key] = value
+            # --- Clean the Key ---
+            raw_key_text = info.span.contents[1].text
+            cleaned_text = re.sub(r'[^\w\s:]', '', raw_key_text)
+            key = cleaned_text.replace(':', '').strip()
+
+            if key and key.lower() not in IGNORED_KEYS:
+                # --- Clean the Value ---
+                raw_value_text = info.span.contents[3].text
+                value = " ".join(raw_value_text.split())
+
+                prod_info_dict[key] = value
+
         except (AttributeError, IndexError):
             continue  # Skip row if format is unexpected
+
     return prod_info_dict
+
+
+def handle_html_content(id):
+    """Finds an element and returns its full HTML content as a string."""
+    element = page.find(id=id)
+    if element:
+        # Convert the BeautifulSoup tag object to a string to get the raw HTML
+        html_content = str(element)
+        return html_content
+    return None
 
 
 # * function to extract hi-res image URLs from the page's JavaScript
@@ -120,7 +165,7 @@ def get_image_urls(soup):
 
 
 # List of possible ID values containing product info
-ids = ['prodDetails', 'tech', 'detailBullets_feature_div']
+ids = ['prodDetails', 'tech']
 
 
 # scrape product information into a dictionary
@@ -133,8 +178,7 @@ def get_info(ids=ids):
                     return handle_table(id)
                 case 'tech':
                     return handle_alt_table(id)
-                case 'detailBullets_feature_div':
-                    return handle_list(id)
+
         except AttributeError:
             print(f"ID {id} not found or format is incorrect.")
             continue
@@ -162,54 +206,118 @@ def get_product_overview(id='productOverview_feature_div'):
 
 # Initialise main dictionary
 prod_info_dict = {}
+prod_info_dict['URL'] = url
 
 # Get primary product information and add it as a sub-dictionary
 prod_details_data = get_info(ids)
 prod_info_dict['prodDetails'] = prod_details_data
 
-# Get item featured bullets as a list of bullet points
+# Get item description as a list of bullet points
 try:
     # Find the unordered list with the id 'feature-bullets'
-    featuredBullets = page.find(id='feature-bullets')
+    featuredBullets_list = page.find(id='feature-bullets')
     # Find all list items (li) within that list
-    bullet_points = featuredBullets.find_all('li')
+    bullet_points = featuredBullets_list.find_all('li')
     # Extract the text from each list item's span and store it in a list
     featuredBullets_array = [point.find('span', class_='a-list-item').get_text(strip=True) for point in bullet_points if
-                         point.find('span', class_='a-list-item')]
+                             point.find('span', class_='a-list-item')]
     prod_info_dict['featuredBullets'] = featuredBullets_array
 except AttributeError:
     prod_info_dict['featuredBullets'] = []  # Return an empty list if not found
+prod_info_dict['importantInformation'] = handle_html_content('important-information')
 
 # Get item title
 try:
     title = page.find(id='productTitle').text.strip().encode("ascii", "ignore").decode()
     prod_info_dict['Title'] = title
 except AttributeError:
-    prod_info_dict['Title'] = "Not Found"
+    prod_info_dict['Title'] = "N/A"
 
 # Get item price
 try:
+    price_str = None
+    # Selects the price element, preferring the 'a-offscreen' version which is cleaner
     price_span = page.select_one('#corePrice_feature_div .a-price')
     if price_span:
         price_offscreen = price_span.find('span', class_='a-offscreen')
         if price_offscreen:
-            prod_info_dict['Price'] = price_offscreen.text.strip()
+            price_str = price_offscreen.text.strip()
         else:
-            # Fallback for when the main price is not in an offscreen span
-            # symbol = price_span.find('span', class_='a-price-symbol').text.strip()
-            whole = price_span.find('span', class_='a-price-whole').text.strip()
-            fraction = price_span.find('span', class_='a-price-fraction').text.strip()
-            prod_info_dict['Price'] = f"{whole}{fraction}"
-    else:
-        prod_info_dict['Price'] = "Not Found"
+            # Fallback for structures where price is in parts
+            whole_span = price_span.find('span', class_='a-price-whole')
+            fraction_span = price_span.find('span', class_='a-price-fraction')
+            if whole_span and fraction_span:
+                # The 'whole' part often contains the decimal point, e.g., "18."
+                price_str = f"{whole_span.text.strip()}{fraction_span.text.strip()}"
 
-except AttributeError:
-    prod_info_dict['Price'] = "Not Found"
+    if price_str:
+        # Clean the string of any currency symbols or other non-numeric characters
+        # This regex will remove anything that's not a digit or a decimal point.
+        cleaned_price_str = re.sub(r'[^\d.]', '', price_str)
+        try:
+            # Convert to float. The output in JSON will be a float.
+            prod_info_dict['Price'] = float(cleaned_price_str)
+        except (ValueError, TypeError):
+            print(f"Could not convert price string '{cleaned_price_str}' to float.")
+            prod_info_dict['Price'] = "N/A"
+    else:
+        # If no price element was found at all
+        prod_info_dict['Price'] = -1.0
+except Exception as e:
+    print(f"An error occurred during price extraction: {e}")
+    prod_info_dict['Price'] = -1.0
+
+# Check for a deal badge
+try:
+    deal_badge_element = page.find(class_="dealBadge")
+    if deal_badge_element:
+        prod_info_dict['tempDeal'] = True
+    else:
+        prod_info_dict['tempDeal'] = False
+except Exception as e:
+    print(f"An error occurred during deal badge check: {e}")
+    prod_info_dict['tempDeal'] = False
+
+# Check for a coupon voucher and extract the discount percentage
+try:
+    coupon_element = page.find(class_="couponLabelText")
+    if coupon_element:
+        voucher_text = coupon_element.get_text(strip=True)
+
+        # Clean the text to remove keywords and unwanted characters like '|'
+        # The pipe '|' is escaped with a backslash in the regex pattern
+        cleaned_text = re.sub(r'apply|voucher|terms|shop|items|\|', '', voucher_text, flags=re.IGNORECASE).strip()
+
+        # Check if the discount is a percentage
+        if '%' in cleaned_text:
+            value_str = cleaned_text.replace('%', '').strip()
+            if value_str:
+                # Convert to a decimal value for percentage
+                discount_value = float(value_str) / 100.0
+                prod_info_dict['discount_type'] = 'percentage'
+                prod_info_dict['discount_value'] = discount_value
+
+        # Check if the discount is a fixed amount in pounds
+        elif '£' in cleaned_text:
+            value_str = cleaned_text.replace('£', '').strip()
+            if value_str:
+                discount_value = float(value_str)
+                prod_info_dict['discount_type'] = 'fixed'
+                prod_info_dict['discount_value'] = discount_value
+
+except Exception as e:
+    print(f"An error occurred during discount voucher extraction: {e}")
 
 # Get product overview and add it as a sub-dictionary
 product_overview = get_product_overview()
 prod_info_dict['productOverview'] = product_overview
 
+# Call the function and get the details
+details = handle_list('detailBullets_feature_div')
+
+# Only add the details to the dictionary if the result is not empty
+if details:
+    prod_info_dict['detailBullets'] = details
 # Get hi-res image URLs and add them to the dictionary
 prod_info_dict['imageUrls'] = get_image_urls(page)
 
