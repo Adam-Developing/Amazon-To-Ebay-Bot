@@ -1,3 +1,4 @@
+import argparse
 import subprocess
 import sys
 import os
@@ -10,6 +11,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 from dotenv import load_dotenv
+
+from bulk_parser import parse_bulk_items
 
 # --- Configuration ---
 load_dotenv()
@@ -159,27 +162,81 @@ def get_ebay_user_token(existing_tokens):
     return get_user_token_full_flow()
 
 
-def run_script(script_name):
-    """Runs a Python script, allowing for real-time interaction."""
-    print(f"\n--- Running {script_name} ---")
+def run_script(args_list):
+    """Runs a Python script with arguments, allowing for real-time interaction."""
+    print(f"\n--- Running: {' '.join(args_list)} ---")
     try:
-        subprocess.run([sys.executable, script_name], check=True)
-        print(f"--- Finished {script_name} successfully ---")
+        subprocess.run([sys.executable] + args_list, check=True)
+        print(f"--- Finished {' '.join(args_list)} successfully ---")
         return True
     except FileNotFoundError:
-        print(f"❌ ERROR: The file '{script_name}' was not found.")
+        print(f"❌ ERROR: Script '{args_list[0]}' not found.")
         return False
     except subprocess.CalledProcessError as e:
-        print(f"❌ ERROR: {script_name} failed with exit code {e.returncode}.")
+        print(f"❌ ERROR: {' '.join(args_list)} failed with exit code {e.returncode}.")
         return False
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
         return False
 
+def read_bulk_text_from_stdin() -> str:
+    print("\nPaste your bulk text (finish with a blank line then CTRL+D / CTRL+Z):")
+    try:
+        return sys.stdin.read()
+    except KeyboardInterrupt:
+        return ""
+
+def orchestrate_single():
+    # Original interactive loop preserved
+    for i in range(int(input("How many listings: "))):
+        if run_script(["amazon.py"]):
+            run_script(["ebay.py"])
+
+def orchestrate_bulk():
+    bulk_text = read_bulk_text_from_stdin().strip()
+    if not bulk_text:
+        print("❌ No bulk text provided.")
+        return
+    items = parse_bulk_items(bulk_text)
+    if not items:
+        print("❌ Could not parse any items from the bulk text.")
+        return
+
+    print(f"\nParsed {len(items)} item(s).")
+    os.makedirs("bulk_products", exist_ok=True)
+
+    for idx, item in enumerate(items, start=1):
+        print(f"\n=== Item {idx} ===")
+        print(json.dumps(item, indent=2))
+        product_path = os.path.join("bulk_products", f"product_{idx}.json")
+
+        # Step A: scrape Amazon -> product_{idx}.json (passing note, qty, custom specifics)
+        amazon_args = [
+            "amazon.py",
+            "--url", item.get("url", ""),
+            "--out", product_path,
+            "--note", item.get("note", ""),
+            "--quantity", str(item.get("quantity", 1)),
+            "--custom-specifics", json.dumps(item.get("custom_specifics", {}))
+        ]
+        if not run_script(amazon_args):
+            continue
+
+        # Step B: list on eBay non-interactively using that JSON
+        ebay_args = [
+            "ebay.py",
+            "--product", product_path,
+            "--non-interactive"
+        ]
+        run_script(ebay_args)
 
 def main():
     """Main function to orchestrate the process."""
     print("--- Starting Process ---")
+
+    parser = argparse.ArgumentParser(description="eBay lister runner")
+    parser.add_argument("--bulk", action="store_true", help="Paste bulk text on stdin and process automatically")
+    args, _ = parser.parse_known_args()
 
     if not all([CLIENT_ID, CLIENT_SECRET, DEV_ID, RUNAME, REDIRECT_URI_HOST]):
         print("❌ ERROR: All eBay credentials must be set in the .env file.")
@@ -204,11 +261,14 @@ def main():
     save_tokens(all_tokens)
 
     print("\n--- All tokens are ready ---")
-    for i in range(int(input("How many listings: "))):
-        if run_script("amazon.py"):
-            # If the first script was successful, run the second one
-            run_script("ebay.py")
 
+    if args.bulk:
+        orchestrate_bulk()
+        while input("Again? (y/n): ").lower() == "y":
+            orchestrate_bulk()
+
+    else:
+        orchestrate_single()
 
 if __name__ == "__main__":
     main()
