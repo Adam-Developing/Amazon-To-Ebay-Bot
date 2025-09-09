@@ -6,7 +6,8 @@ import xml.etree.ElementTree as ET
 import requests
 import argparse  # NEW
 from dotenv import load_dotenv
-from CentralFunctions import categoryTreeID, categoryID, get_item_specifics, set_seller_note, find_minimum_price
+from CentralFunctions import categoryTreeID, categoryID, get_item_specifics, set_seller_note, find_minimum_price, map_one_dict, merge_specifics_in_order
+
 
 def parse_args():
     ap = argparse.ArgumentParser()
@@ -139,6 +140,7 @@ itemSpecifics = get_item_specifics(applicationToken, categoryTree, catID, data)
 custom_json_specifics = data.get('customSpecifics', {})
 if isinstance(custom_json_specifics, dict):
     itemSpecifics.update({k: str(v) for k, v in custom_json_specifics.items() if v is not None})
+user_added = {}
 
 # Optional interactive add
 if not args.non_interactive:
@@ -150,9 +152,12 @@ if not args.non_interactive:
             break
         value = input(f"Enter value for '{name}': ").strip()
         if name and value:
-            itemSpecifics[name] = value
+            user_added[name] = value
         else:
             print("Both name and value are required. Specific not added.")
+# Map user-added keys (keep exact if no mapping), then merge so user overrides
+mapped_user_added = map_one_dict(user_added)
+itemSpecifics = merge_specifics_in_order(itemSpecifics, mapped_user_added)
 
 # Build XML fragments
 item_specifics_xml = "<ItemSpecifics>"

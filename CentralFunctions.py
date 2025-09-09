@@ -9,8 +9,8 @@ load_dotenv()
 # ---- eBay aspect key mapping (edit here) ------------------------------------
 # Left side: various inputs you might see (Amazon, bulk, user paste)
 # Right side: the final eBay aspect name to send.
+# --- Mapping: edit on the left; exact eBay aspect name on the right (case-sensitive) ---
 EBAY_ASPECT_KEY_MAP = {
-    # Core apparel / variants
     "size name": "Size",
     "size": "Size",
     "style name": "Style",
@@ -26,68 +26,38 @@ EBAY_ASPECT_KEY_MAP = {
     "type": "Type",
     "variant": "Variant",
     "edition": "Edition",
-
-    # Footwear / apparel details
-    "shoe size": "Shoe Size",
-    "waist": "Waist Size",
-    "chest": "Chest Size",
-    "fit": "Fit",
-    "age range": "Age Range",
-    "gender": "Department",            # sometimes eBay expects 'Department'/'Men/Women/Unisex'
-
-    # Electronics / general specs
-    "capacity": "Capacity",
-    "storage": "Storage Capacity",
     "ram": "RAM",
-    "connectivity": "Connectivity",
+    "storage": "Storage Capacity",
+    "capacity": "Capacity",
     "platform": "Platform",
+    "connectivity": "Connectivity",
     "power": "Power",
     "wattage": "Wattage",
     "voltage": "Voltage",
-
-    # Dimensions
     "length": "Length",
     "width": "Width",
     "height": "Height",
-    "dimensions": "Dimensions",
-
-    # Health/beauty/supplements
     "flavour": "Flavour",
     "flavor": "Flavour",
     "pack size": "Pack Size",
     "quantity per pack": "Quantity per Pack",
-
-    # Lingerie / bras
     "band size": "Band Size",
     "cup size": "Cup Size",
-
-    # Fallback examples (add to taste)
-    "style group": "Style",
-    "size option": "Size",
-    "colour option": "Colour",
 }
 
-# -----------------------------------------------------------------------------
-
 def _norm(s: str) -> str:
-    """Normalise keys for matching: lowercase, collapse spaces, strip punctuation-like chars."""
     import re
     s = (s or "").strip().lower()
-    s = re.sub(r'[\u2010-\u2015]', '-', s)  # normalise weird dashes
-    s = re.sub(r'[^a-z0-9\s/+-]', '', s)    # keep alnum, spaces, / + -
+    s = re.sub(r'[\u2010-\u2015]', '-', s)  # normalise dashes
+    s = re.sub(r'[^a-z0-9\s/+.-]', '', s)
     s = re.sub(r'\s+', ' ', s)
     return s
 
 def map_to_ebay_aspect_name(input_key: str) -> str | None:
-    """
-    Returns the mapped eBay aspect name for an input key, or None if no mapping exists.
-    """
+    """Case-insensitive input, returns the exact-cased eBay aspect name or None."""
     k = _norm(input_key)
-    # Direct match
     if k in EBAY_ASPECT_KEY_MAP:
         return EBAY_ASPECT_KEY_MAP[k]
-    # Gentle heuristics: strip trailing words like 'name'
-    # e.g. "size name" -> "size", "colour option" -> "colour"
     for suffix in (" name", " option", " value"):
         if k.endswith(suffix):
             base = k[: -len(suffix)]
@@ -95,22 +65,26 @@ def map_to_ebay_aspect_name(input_key: str) -> str | None:
                 return EBAY_ASPECT_KEY_MAP[base]
     return None
 
-def map_specifics_dict(d: dict) -> tuple[dict, dict]:
-    """
-    Map an input specifics dict to eBay aspect names using EBAY_ASPECT_KEY_MAP.
-    Returns (mapped, unmapped). If a key maps to the same eBay name multiple times,
-    later values override earlier ones.
-    """
-    mapped: dict = {}
-    unmapped: dict = {}
+def map_one_dict(d: dict) -> dict:
+    """Map a dict's keys; if no mapping exists, keep the exact original key."""
+    out = {}
     for k, v in (d or {}).items():
-        tgt = map_to_ebay_aspect_name(str(k))
-        if tgt:
-            mapped[tgt] = v
-        else:
-            unmapped[k] = v
-    return mapped, unmapped
+        mapped = map_to_ebay_aspect_name(str(k))
+        out[mapped if mapped else str(k)] = str(v)
+    return out
 
+def merge_specifics_in_order(*dicts: dict) -> dict:
+    """
+    Merge multiple specifics dicts in order; later dicts override earlier ones.
+    Keys are compared case-sensitively (because eBay aspect names are case-sensitive).
+    """
+    merged = {}
+    for d in dicts:
+        for k, v in (d or {}).items():
+            if v is None:
+                continue
+            merged[str(k)] = str(v)
+    return merged
 
 def categoryTreeID(access_token):
     """
@@ -181,172 +155,130 @@ def categoryID(access_token, categoryTreeId, title_variable):
 
 def get_item_specifics(token, category_tree_id, category_id, product_data):
     """
-    Gets required and custom aspects for a category. It:
-      1) Shows & pre-loads custom specifics parsed from bulk input (product_data['customSpecifics']), mapping them to eBay aspect names.
-      2) Lets you paste additional specifics; maps them to eBay names.
-      3) Auto-fills from product.json (prodDetails/productOverview); also tries to map common Amazon-ish keys to the current eBay aspect.
-      4) Prompts for any remaining *required* aspects (selection-only or free text).
+    Pipeline:
+      1) Collect inputs (bulk customSpecifics, additional paste, scraped data).
+      2) Map all keys via EBAY_ASPECT_KEY_MAP; keep exact key when no mapping exists.
+      3) Merge in order so user-supplied overrides auto suggestions.
+      4) Fetch taxonomy; if a required aspect is missing, prompt.
+         - If SELECTION_ONLY and our value not in options -> prompt to choose/confirm.
+         - Otherwise keep our value and don't ask.
     """
     headers = {'Authorization': f'Bearer {token}'}
-    url = f"https://api.ebay.com/commerce/taxonomy/v1/category_tree/{category_tree_id}/get_item_aspects_for_category?category_id={category_id}"
-
-    item_specifics: dict[str, str] = {}
+    url = f"https://api.ebay.com/commerce/taxonomy/v1/category_tree/{category_id if str(category_tree_id).isdigit() else category_tree_id}/get_item_aspects_for_category?category_id={category_id}"
 
     try:
         print("\n--- Populating Item Specifics ---")
 
-        # --- 0) Bulk/custom specifics from product_data (already parsed earlier) ---
-        bulk_custom = product_data.get('customSpecifics', {})
-        if isinstance(bulk_custom, dict) and bulk_custom:
-            mapped_bulk, unmapped_bulk = map_specifics_dict(bulk_custom)
-            if mapped_bulk:
-                print("\nExisting custom specifics (mapped to eBay names):")
-                for k, v in mapped_bulk.items():
-                    print(f"  - {k}: {v}")
-                item_specifics.update({str(k): str(v) for k, v in mapped_bulk.items()})
-            if unmapped_bulk:
-                print("\n(Info) Unmapped custom specifics (kept as-is unless a required aspect matches):")
-                for k, v in unmapped_bulk.items():
-                    print(f"  - {k}: {v}")
-                # We keep them aside; may still use if they correspond to a required aspect name directly
-                # (Handled below during the per-aspect loop)
+        # Inputs from earlier stages
+        bulk_custom = product_data.get('customSpecifics', {}) or {}
 
-        # --- 1) Additional pasted specifics (optional) ---
+        # Show what we already have from bulk (for transparency)
+        if bulk_custom:
+            print("\nExisting custom specifics (raw):")
+            for k, v in bulk_custom.items():
+                print(f"  - {k}: {v}")
+
+        # Additional pasted specifics (user)
         pasted_string = input(
             "\nPaste additional custom specifics (e.g., Name: Value | Name: Value) or press Enter to continue: "
         ).strip()
-
+        pasted_dict = {}
         if pasted_string:
-            pairs = pasted_string.split('|')
-            temp_dict = {}
-            for pair in pairs:
-                if ':' in pair:
-                    key, value = pair.split(':', 1)
-                    clean_key = key.strip()
-                    clean_value = value.strip()
-                    if clean_key and clean_value:
-                        temp_dict[clean_key] = clean_value
+            for part in pasted_string.split('|'):
+                if ':' in part:
+                    k, v = part.split(':', 1)
+                    k, v = k.strip(), v.strip()
+                    if k and v:
+                        pasted_dict[k] = v
 
-            mapped_paste, unmapped_paste = map_specifics_dict(temp_dict)
-            if mapped_paste:
-                print("✅ Added (mapped) custom specifics:")
-                for k, v in mapped_paste.items():
-                    print(f"  - {k}: {v}")
-                item_specifics.update(mapped_paste)
-            if unmapped_paste:
-                print("(Info) Additional unmapped specifics captured (kept for later matching):")
-                for k, v in unmapped_paste.items():
-                    print(f"  - {k}: {v}")
-                # We'll try to match them to current aspect names during the aspect loop
-        else:
-            unmapped_paste = {}
-
-        # --- 2) Fetch and process API-defined aspects ---
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-
-        # Prepare product data for auto-fill
+        # Scraped product data (we treat these as suggestions; your inputs will override)
         prod_details = product_data.get('prodDetails', {}) or {}
         prod_overview = product_data.get('productOverview', {}) or {}
 
-        # Normalised views to help match later
-        prod_details_norm = { _norm(k): v for k, v in prod_details.items() }
-        prod_overview_norm = { _norm(k): v for k, v in prod_overview.items() }
+        # Map everything (unmapped keys are kept exact)
+        mapped_bulk       = map_one_dict(bulk_custom)
+        mapped_paste      = map_one_dict(pasted_dict)
+        mapped_details    = map_one_dict(prod_details)
+        mapped_overview   = map_one_dict(prod_overview)
 
-        # Helper: try find a value in scraped dicts via explicit mapping
-        def try_mapped_autofill(target_aspect_name: str) -> str | None:
-            """
-            For a given eBay aspect name, look in prod_details/prod_overview for keys which map to that name.
-            """
-            wanted = target_aspect_name.strip()
-            for src_dict in (prod_details, prod_overview):
-                for k, v in src_dict.items():
-                    mapped = map_to_ebay_aspect_name(k)
-                    if mapped and mapped.lower() == wanted.lower():
-                        return v
-            return None
+        # Merge order defines precedence:
+        # 1) scraped suggestions (details/overview)
+        # 2) bulk custom (from your parser)
+        # 3) additional paste (typed just now)  -> strongest
+        pre_merged = merge_specifics_in_order(mapped_details, mapped_overview, mapped_bulk, mapped_paste)
 
-        # Also hold any unmapped custom specifics from earlier steps
-        # Combine for later: prefer paste over bulk if same key appears
-        combined_unmapped = {}
-        # add bulk first then paste to let paste override
-        if isinstance(bulk_custom, dict):
-            for k, v in bulk_custom.items():
-                if not map_to_ebay_aspect_name(k):
-                    combined_unmapped[k] = v
-        if isinstance(locals().get('unmapped_paste', {}), dict):
-            for k, v in unmapped_paste.items():
-                if not map_to_ebay_aspect_name(k):
-                    combined_unmapped[k] = v
+        # Fetch taxonomy
+        response = requests.get(
+            f"https://api.ebay.com/commerce/taxonomy/v1/category_tree/{category_tree_id}/get_item_aspects_for_category",
+            params={"category_id": category_id},
+            headers=headers
+        )
+        response.raise_for_status()
+        taxonomy = response.json()
 
-        for aspect in data.get('aspects', []):
-            name = aspect['localizedAspectName']
-            is_required = aspect.get('aspectConstraint', {}).get('aspectRequired', False)
+        # Validate against taxonomy: add only where appropriate; prompt if required and missing/invalid
+        item_specifics = dict(pre_merged)  # start with your mapped+merged values
 
-            # If already provided (from mapped bulk/paste), skip
-            if name in item_specifics:
-                print(f"Using provided value for '{name}': {item_specifics[name]}")
+        def has_value_for(aspect_name: str) -> bool:
+            return aspect_name in item_specifics and str(item_specifics[aspect_name]).strip() != ""
+
+        for aspect in taxonomy.get('aspects', []):
+            name = aspect['localizedAspectName']  # exact eBay casing
+            mode = aspect.get('aspectConstraint', {}).get('aspectMode')
+            required = aspect.get('aspectConstraint', {}).get('aspectRequired', False)
+            options = [ov.get('localizedValue') for ov in aspect.get('aspectValues', [])] if aspect.get('aspectValues') else []
+
+            # If we already have a value after mapping+merge:
+            if has_value_for(name):
+                val = item_specifics[name]
+                if mode == 'SELECTION_ONLY' and options:
+                    # If our value isn't a valid option, we must ask
+                    if not any(val.lower() == (opt or "").lower() for opt in options):
+                        print(f"\n'{name}' must be selected from allowed values.")
+                        print("Allowed options:")
+                        for i, opt in enumerate(options, start=1):
+                            print(f"  {i}: {opt}")
+                        while True:
+                            pick = input(f"Enter number 1-{len(options)} or type exact value: ").strip()
+                            try:
+                                idx = int(pick)
+                                if 1 <= idx <= len(options):
+                                    item_specifics[name] = options[idx - 1]
+                                    break
+                            except ValueError:
+                                if any((opt or "").lower() == pick.lower() for opt in options):
+                                    item_specifics[name] = pick
+                                    break
+                            print("Invalid choice. Try again.")
+                # else: free text, our value stands (overwrites any suggestion)
                 continue
 
-            # 2a. Direct match from product_data if keys already match eBay aspect name
-            # (case-insensitive)
-            found_value = None
-            if _norm(name) in prod_details_norm:
-                found_value = prod_details_norm[_norm(name)]
-            elif _norm(name) in prod_overview_norm:
-                found_value = prod_overview_norm[_norm(name)]
-
-            # 2b. If not, try mapped auto-fill (Amazon-ish keys -> eBay aspect)
-            if not found_value:
-                found_value = try_mapped_autofill(name)
-
-            # 2c. If still not found, see if any UNMAPPED custom key literally matches the eBay aspect name
-            if not found_value:
-                for k, v in list(combined_unmapped.items()):
-                    if _norm(k) == _norm(name):
-                        found_value = v
-                        break
-
-            if found_value:
-                item_specifics[name] = found_value
-                print(f"Found '{name}' automatically: {found_value}")
-                continue
-
-            # 2d. Prompt if required
-            if is_required:
-                print(f"\n❓ Required aspect '{name}' not found automatically.")
-                mode = aspect.get('aspectConstraint', {}).get('aspectMode')
-
-                if mode == 'SELECTION_ONLY' and aspect.get('aspectValues'):
-                    options = aspect['aspectValues']
-                    print(f"Please select one for '{name}':")
-                    for i, option in enumerate(options, start=1):
-                        print(f"  {i}: {option['localizedValue']}")
+            # We don't have a value yet:
+            if required:
+                print(f"\n❓ Required aspect '{name}' is missing.")
+                if mode == 'SELECTION_ONLY' and options:
+                    print("Please select:")
+                    for i, opt in enumerate(options, start=1):
+                        print(f"  {i}: {opt}")
                     while True:
-                        raw = input(f"Enter your choice (1-{len(options)}) or type the exact value: ").strip()
+                        raw = input(f"Enter number 1-{len(options)} or type exact value: ").strip()
                         try:
                             idx = int(raw)
                             if 1 <= idx <= len(options):
-                                item_specifics[name] = options[idx - 1]['localizedValue']
+                                item_specifics[name] = options[idx - 1]
                                 break
-                            else:
-                                print("Invalid choice. Please try again.")
-                                continue
                         except ValueError:
-                            typed = raw
-                            if any(ov['localizedValue'].lower() == typed.lower() for ov in options):
-                                item_specifics[name] = typed
+                            if any((opt or "").lower() == raw.lower() for opt in options):
+                                item_specifics[name] = raw
                                 break
-                            print("Value not recognised. Choose a number from the list or type an exact match.")
+                        print("Invalid choice. Try again.")
                 else:
                     while True:
-                        value = input(f"Please enter a value for '{name}' (Free Text): ").strip()
-                        if value:
-                            item_specifics[name] = value
+                        val = input(f"Please enter a value for '{name}': ").strip()
+                        if val:
+                            item_specifics[name] = val
                             break
-                        else:
-                            print("This field cannot be empty. Please enter a value.")
+                        print("This field cannot be empty.")
 
         print("\n--- Finished Populating Item Specifics ---")
         return item_specifics
