@@ -11,7 +11,7 @@ COMMON_SPEC_KEYS = {
 }
 
 _url_re = re.compile(r'https?://\S*amazon\.[a-z.]+/\S+', re.IGNORECASE)
-_qty_re = re.compile(r'^\s*quantity\s*:\s*(\d+)\s*$', re.IGNORECASE)
+_qty_re = re.compile(r'^\s*(?:qty|quantity)\s*:\s*(\d+)\s*$', re.IGNORECASE)
 _note_re = re.compile(r'^\s*note\b[:\s]\s*(.+)$', re.IGNORECASE)
 
 def _parse_specifics_line(line: str) -> Dict[str, str]:
@@ -34,11 +34,14 @@ def _parse_specifics_line(line: str) -> Dict[str, str]:
 def parse_bulk_items(text: str) -> List[Dict]:
     """Parse bulk text into items of the form: {url, quantity, note, custom_specifics}."""
     lines = [ln.rstrip() for ln in text.strip().splitlines()]
+
     blocks, current = [], []
     for ln in lines:
-        if not ln.strip():
+        # New: split blocks on blank lines OR a line that's just a number (e.g., "23")
+        if not ln.strip() or re.match(r'^\s*\d+\s*$', ln):
             if current:
-                blocks.append(current); current = []
+                blocks.append(current)
+                current = []
         else:
             current.append(ln)
     if current:
@@ -53,15 +56,22 @@ def parse_bulk_items(text: str) -> List[Dict]:
             if not url:
                 m_url = _url_re.search(ln)
                 if m_url:
+                    # Trim common trailing punctuation/brackets
                     url = m_url.group(0).strip().rstrip(').,]')
                     continue
+
             m_qty = _qty_re.match(ln)
             if m_qty:
-                qty = int(m_qty.group(1)); continue
+                qty = int(m_qty.group(1))
+                continue
+
             m_note = _note_re.match(ln)
             if m_note:
-                note = m_note.group(1).strip(); continue
-            if ':' in ln and not ln.lower().startswith(('quantity', 'note')) and not _url_re.search(ln):
+                note = m_note.group(1).strip()
+                continue
+
+            # Specifics lines: "Key: Value | Key: Value" etc.
+            if ':' in ln and not ln.lower().startswith(('quantity', 'qty', 'note')) and not _url_re.search(ln):
                 cand = _parse_specifics_line(ln)
                 if cand:
                     custom_specifics.update(cand)

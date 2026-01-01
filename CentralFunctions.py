@@ -4,6 +4,7 @@ import requests
 import xml.etree.ElementTree as ET
 
 from dotenv import load_dotenv
+from ui_bridge import IOBridge  # added
 
 load_dotenv()
 # ---- eBay aspect key mapping (edit here) ------------------------------------
@@ -111,11 +112,10 @@ def categoryTreeID(access_token):
         categoryTreeId = categoryJson["categoryTreeId"]
 
     except requests.exceptions.HTTPError as http_err:
-        print(f"HTTP error occurred: {http_err}")
+        # Avoid printing; default to GB tree id 3
         categoryTreeId = 3
 
-    except Exception as err:
-        print(f"An error occurred: {err}")
+    except Exception:
         categoryTreeId = 3
     return categoryTreeId
 
@@ -141,47 +141,62 @@ def categoryID(access_token, categoryTreeId, title_variable):
         CategoryID = response.json()['categorySuggestions'][0]['category']['categoryId']
 
 
-    except requests.exceptions.HTTPError as http_err:
-        print(f"HTTP error occurred: {http_err}")
+    except requests.exceptions.HTTPError:
         CategoryID = 14254
 
-    except Exception as err:
-        print(f"An error occurred: {err}")
+    except Exception:
         CategoryID = 14254
     return CategoryID
 
 
 
 
-def get_item_specifics(token, category_tree_id, category_id, product_data):
+def get_item_specifics(token, category_tree_id, category_id, product_data, io: IOBridge) -> dict:
     """
     Pipeline:
-      1) Collect inputs (bulk customSpecifics, additional paste, scraped data).
-      2) Map all keys via EBAY_ASPECT_KEY_MAP; keep exact key when no mapping exists.
-      3) Merge in order so user-supplied overrides auto suggestions.
-      4) Fetch taxonomy; if a required aspect is missing, prompt.
-         - If SELECTION_ONLY and our value not in options -> prompt to choose/confirm.
-         - Otherwise keep our value and don't ask.
+      1) Fetch taxonomy to know allowed aspects for this category (exact eBay names).
+      2) Collect inputs (bulk customSpecifics, additional paste, scraped data).
+      3) Map all keys via EBAY_ASPECT_KEY_MAP; keep exact key when no mapping exists.
+      4) Discard SCRAPED suggestions (details/overview) that are NOT in taxonomy (both optional+required).
+      5) Merge in order so user-supplied overrides auto suggestions:
+         filtered_details → filtered_overview → mapped_bulk → mapped_paste
+      6) For taxonomy aspects:
+         - If already present after merge, keep it; if SELECTION_ONLY and invalid, prompt to choose.
+         - If required and still missing, prompt via io.
     """
     headers = {'Authorization': f'Bearer {token}'}
-    url = f"https://api.ebay.com/commerce/taxonomy/v1/category_tree/{category_id if str(category_tree_id).isdigit() else category_tree_id}/get_item_aspects_for_category?category_id={category_id}"
 
     try:
-        print("\n--- Populating Item Specifics ---")
+        io.log("--- Populating Item Specifics ---")
 
-        # Inputs from earlier stages
+        # ---------- 1) Fetch taxonomy first ----------
+        tx_resp = requests.get(
+            f"https://api.ebay.com/commerce/taxonomy/v1/category_tree/{category_tree_id}/get_item_aspects_for_category",
+            params={"category_id": category_id},
+            headers=headers
+        )
+        tx_resp.raise_for_status()
+        taxonomy = tx_resp.json()
+        allowed_aspects = {a['localizedAspectName'] for a in taxonomy.get('aspects', [])}
+
+        # ---------- 2) Inputs ----------
         bulk_custom = product_data.get('customSpecifics', {}) or {}
 
-        # Show what we already have from bulk (for transparency)
+        # Show existing for transparency inside the prompt
+        existingCustomSpecifics = ""
         if bulk_custom:
-            print("\nExisting custom specifics (raw):")
+            existingCustomSpecifics += "Existing custom specifics (raw):\n"
             for k, v in bulk_custom.items():
-                print(f"  - {k}: {v}")
+                existingCustomSpecifics += f"  - {k}: {v}\n"
+        if os.getenv("CUSTOM_SPECIFICS", "False").lower() == "true":
+            pasted_string = io.prompt_text(
+                existingCustomSpecifics +
+                "\nPaste additional custom specifics (e.g., Name: Value | Name: Value) or press Enter to continue:",
+                default=""
+            ).strip()
+        else:
+            pasted_string = ""
 
-        # Additional pasted specifics (user)
-        pasted_string = input(
-            "\nPaste additional custom specifics (e.g., Name: Value | Name: Value) or press Enter to continue: "
-        ).strip()
         pasted_dict = {}
         if pasted_string:
             for part in pasted_string.split('|'):
@@ -191,111 +206,80 @@ def get_item_specifics(token, category_tree_id, category_id, product_data):
                     if k and v:
                         pasted_dict[k] = v
 
-        # Scraped product data (we treat these as suggestions; your inputs will override)
+        # Scraped suggestions (to be filtered by taxonomy)
         prod_details = product_data.get('prodDetails', {}) or {}
         prod_overview = product_data.get('productOverview', {}) or {}
 
-        # Map everything (unmapped keys are kept exact)
-        mapped_bulk       = map_one_dict(bulk_custom)
-        mapped_paste      = map_one_dict(pasted_dict)
-        mapped_details    = map_one_dict(prod_details)
-        mapped_overview   = map_one_dict(prod_overview)
+        # ---------- 3) Map keys (unmapped keep exact) ----------
+        mapped_bulk     = map_one_dict(bulk_custom)     # keep extras
+        mapped_paste    = map_one_dict(pasted_dict)     # keep extras
+        mapped_details  = map_one_dict(prod_details)    # will be filtered
+        mapped_overview = map_one_dict(prod_overview)   # will be filtered
 
-        # Merge order defines precedence:
-        # 1) scraped suggestions (details/overview)
-        # 2) bulk custom (from your parser)
-        # 3) additional paste (typed just now)  -> strongest
-        pre_merged = merge_specifics_in_order(mapped_details, mapped_overview, mapped_bulk, mapped_paste)
+        # ---------- 4) Filter scraped suggestions NOT in taxonomy ----------
+        filtered_details  = {k: v for k, v in mapped_details.items()  if k in allowed_aspects}
+        filtered_overview = {k: v for k, v in mapped_overview.items() if k in allowed_aspects}
 
-        # Fetch taxonomy
-        response = requests.get(
-            f"https://api.ebay.com/commerce/taxonomy/v1/category_tree/{category_tree_id}/get_item_aspects_for_category",
-            params={"category_id": category_id},
-            headers=headers
+        # ---------- 5) Merge with precedence (user wins over scraped) ----------
+        pre_merged = merge_specifics_in_order(
+            filtered_details,
+            filtered_overview,
+            mapped_bulk,
+            mapped_paste
         )
-        response.raise_for_status()
-        taxonomy = response.json()
 
-        # Validate against taxonomy: add only where appropriate; prompt if required and missing/invalid
-        item_specifics = dict(pre_merged)  # start with your mapped+merged values
+        # Start with merged values
+        item_specifics = dict(pre_merged)
 
         def has_value_for(aspect_name: str) -> bool:
             return aspect_name in item_specifics and str(item_specifics[aspect_name]).strip() != ""
 
+        # ---------- 6) Validate against taxonomy & prompt as needed ----------
         for aspect in taxonomy.get('aspects', []):
-            name = aspect['localizedAspectName']  # exact eBay casing
+            name = aspect['localizedAspectName']   # exact eBay casing
             mode = aspect.get('aspectConstraint', {}).get('aspectMode')
             required = aspect.get('aspectConstraint', {}).get('aspectRequired', False)
             options = [ov.get('localizedValue') for ov in aspect.get('aspectValues', [])] if aspect.get('aspectValues') else []
 
-            # If we already have a value after mapping+merge:
             if has_value_for(name):
                 val = item_specifics[name]
+                # If selection-only, validate our value against allowed options
                 if mode == 'SELECTION_ONLY' and options:
-                    # If our value isn't a valid option, we must ask
-                    if not any(val.lower() == (opt or "").lower() for opt in options):
-                        print(f"\n'{name}' must be selected from allowed values.")
-                        print("Allowed options:")
-                        for i, opt in enumerate(options, start=1):
-                            print(f"  {i}: {opt}")
-                        while True:
-                            pick = input(f"Enter number 1-{len(options)} or type exact value: ").strip()
-                            try:
-                                idx = int(pick)
-                                if 1 <= idx <= len(options):
-                                    item_specifics[name] = options[idx - 1]
-                                    break
-                            except ValueError:
-                                if any((opt or "").lower() == pick.lower() for opt in options):
-                                    item_specifics[name] = pick
-                                    break
-                            print("Invalid choice. Try again.")
-                # else: free text, our value stands (overwrites any suggestion)
+                    if not any(str(val).lower() == (str(opt) or "").lower() for opt in options):
+                        io.log(f"'{name}' must be selected from allowed values.")
+                        choice = io.prompt_choice(f"Select a value for '{name}'", options)
+                        if choice:
+                            item_specifics[name] = choice
                 continue
 
-            # We don't have a value yet:
+            # Missing
             if required:
-                print(f"\n❓ Required aspect '{name}' is missing.")
                 if mode == 'SELECTION_ONLY' and options:
-                    print("Please select:")
-                    for i, opt in enumerate(options, start=1):
-                        print(f"  {i}: {opt}")
-                    while True:
-                        raw = input(f"Enter number 1-{len(options)} or type exact value: ").strip()
-                        try:
-                            idx = int(raw)
-                            if 1 <= idx <= len(options):
-                                item_specifics[name] = options[idx - 1]
-                                break
-                        except ValueError:
-                            if any((opt or "").lower() == raw.lower() for opt in options):
-                                item_specifics[name] = raw
-                                break
-                        print("Invalid choice. Try again.")
+                    choice = io.prompt_choice(f"Select a value for required aspect '{name}'", options)
+                    if choice:
+                        item_specifics[name] = choice
                 else:
-                    while True:
-                        val = input(f"Please enter a value for '{name}': ").strip()
-                        if val:
-                            item_specifics[name] = val
-                            break
-                        print("This field cannot be empty.")
+                    val = io.prompt_text(f"Please enter a value for '{name}':", default="").strip()
+                    if val:
+                        item_specifics[name] = val
 
-        print("\n--- Finished Populating Item Specifics ---")
+        io.log("--- Finished Populating Item Specifics ---")
         return item_specifics
 
     except requests.exceptions.HTTPError as e:
-        print(f"❌ API Error fetching aspects: {e.response.text}")
+        io.log(f"API Error fetching aspects: {e.response.text if getattr(e, 'response', None) else str(e)}")
         return {}
     except Exception as e:
-        print(f"❌ An unexpected error occurred: {e}")
+        io.log(f"An unexpected error occurred: {e}")
         return {}
 
 
-def set_seller_note(item_id, note, user_token, app_id, dev_id, cert_id):
+def set_seller_note(item_id, note, user_token, app_id, dev_id, cert_id, io: IOBridge | None = None):
     """
     Sets a private seller note on an existing eBay item using SetUserNotes.
     """
-    print(f"\n--- Adding private note to Item ID: {item_id} ---")
+    io = io or IOBridge()
+    io.log(f"Adding private note to Item ID: {item_id}")
 
     endpoint = "https://api.ebay.com/ws/api.dll"
     headers = {
@@ -329,14 +313,15 @@ def set_seller_note(item_id, note, user_token, app_id, dev_id, cert_id):
         ack = tree.find(f'{namespace}Ack').text
 
         if ack in ['Success', 'Warning']:
-            print(f"✅ Successfully added/updated the seller note.")
+            io.log("Successfully added/updated the seller note.")
         else:
-            print(f"❌ Failed to add seller note.")
+            io.log("Failed to add seller note.")
             for error in tree.findall(f'{namespace}Errors'):
                 short_message = error.find(f'{namespace}ShortMessage').text
-                print(f"   Error: {short_message}")
+                if short_message:
+                    io.log(f"Error: {short_message}")
     except Exception as e:
-        print(f"An unexpected error occurred while setting the seller note: {e}")
+        io.log(f"An unexpected error occurred while setting the seller note: {e}")
 
 
 FIXED_FEE = float(os.getenv("EBAY_FIXED_FEE", 0.72))
