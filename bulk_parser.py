@@ -31,13 +31,20 @@ def _parse_specifics_line(line: str) -> Dict[str, str]:
             return {pairs[0][0].strip(): pairs[0][1].strip()}
     return {}
 
+
 def parse_bulk_items(text: str) -> List[Dict]:
-    """Parse bulk text into items of the form: {url, quantity, note, custom_specifics}."""
+    """
+    Parse bulk text into items.
+    Handles 'header notes' (e.g. 'Box 107') that apply to subsequent items
+    until a new header note is found.
+    """
     lines = [ln.rstrip() for ln in text.strip().splitlines()]
 
-    blocks, current = [], []
+    blocks = []
+    current = []
+
+    # Split blocks on blank lines OR a line that's just a number (e.g., "1", "2")
     for ln in lines:
-        # New: split blocks on blank lines OR a line that's just a number (e.g., "23")
         if not ln.strip() or re.match(r'^\s*\d+\s*$', ln):
             if current:
                 blocks.append(current)
@@ -48,39 +55,59 @@ def parse_bulk_items(text: str) -> List[Dict]:
         blocks.append(current)
 
     items = []
+    current_global_note = ""  # This stores the "sticky" note (e.g., "Box 107")
+
     for block in blocks:
-        url, qty, note = '', None, ''
+        url = ''
+        qty = None
+        local_note = ''
         custom_specifics: Dict[str, str] = {}
 
+        # 1. Scan block for URL and properties
         for ln in block:
+            # Check URL
             if not url:
                 m_url = _url_re.search(ln)
                 if m_url:
-                    # Trim common trailing punctuation/brackets
                     url = m_url.group(0).strip().rstrip(').,]')
                     continue
 
+            # Check Quantity
             m_qty = _qty_re.match(ln)
             if m_qty:
                 qty = int(m_qty.group(1))
                 continue
 
+            # Check Explicit Note (inside the block)
             m_note = _note_re.match(ln)
             if m_note:
-                note = m_note.group(1).strip()
+                local_note = m_note.group(1).strip()
                 continue
 
-            # Specifics lines: "Key: Value | Key: Value" etc.
+            # Check Specifics (Key: Value)
             if ':' in ln and not ln.lower().startswith(('quantity', 'qty', 'note')) and not _url_re.search(ln):
                 cand = _parse_specifics_line(ln)
                 if cand:
                     custom_specifics.update(cand)
 
-        if url or qty is not None or note or custom_specifics:
-            items.append({
-                "url": url,
-                "quantity": qty if qty is not None else 1,
-                "note": note,
-                "custom_specifics": custom_specifics
-            })
+        # 2. Heuristic: Is this block a "Header Note" or an "Item"?
+        if not url:
+            # If a block has NO url, we treat the entire text as a new context/note
+            # for following items (e.g. "Box 107").
+            text_content = " ".join(block).strip()
+            if text_content:
+                current_global_note = text_content
+            continue
+
+        # 3. It is an item (has URL). Apply logic.
+        # Specific local note takes priority over the global header note
+        final_note = local_note if local_note else current_global_note
+
+        items.append({
+            "url": url,
+            "quantity": qty if qty is not None else 1,
+            "note": final_note,
+            "custom_specifics": custom_specifics
+        })
+
     return items
