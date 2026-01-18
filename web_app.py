@@ -102,7 +102,10 @@ class WebIOBridge(IOBridge):
         return _await_prompt("text", prompt, default, [])
 
     def prompt_choice(self, prompt: str, options: List[str]) -> Optional[str]:
-        return _await_prompt("choice", prompt, "", options) or (options[0] if options else None)
+        value = _await_prompt("choice", prompt, "", options)
+        if value is not None:
+            return value
+        return options[0] if options else None
 
     def open_url(self, url: str) -> None:
         _queue_open_url(url)
@@ -340,8 +343,8 @@ def api_scrape():
             try:
                 with open("product.json", "w", encoding="utf-8") as handle:
                     json.dump(product, handle, indent=2)
-            except Exception:
-                pass
+            except Exception as exc:
+                WEB_IO.log(f"Failed to write product.json: {exc}")
         finally:
             _set_processing(False)
 
