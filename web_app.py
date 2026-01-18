@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from typing import Dict, List, Optional
 
 from flask import Flask, render_template_string, request, url_for
@@ -11,7 +12,7 @@ from ebay import list_on_ebay
 from ui_bridge import IOBridge
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key")
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 
 
 class MissingPrompt(Exception):
@@ -258,8 +259,9 @@ def handle_single():
                 listing = list_on_ebay(product, io)
         except MissingPrompt as mp:
             error = f"Additional input required: {mp.prompt}"
-        except Exception as exc:
-            error = str(exc)
+        except Exception:
+            app.logger.exception("Single item processing failed")
+            error = "An unexpected error occurred. Please check server logs."
 
     single_result = None
     if product:
@@ -332,7 +334,8 @@ def handle_bulk():
                         "error": f"Additional input required: {mp.prompt}",
                     }
                 )
-            except Exception as exc:
+            except Exception:
+                app.logger.exception("Bulk item processing failed")
                 bulk_results.append(
                     {
                         "url": item.get("url"),
@@ -340,11 +343,12 @@ def handle_bulk():
                         "listed": False,
                         "item_id": None,
                         "logs": io.logs,
-                        "error": str(exc),
+                        "error": "An unexpected error occurred. Please check server logs.",
                     }
                 )
             opened_urls.extend(io.opened_urls)
-    except Exception as exc:
+    except Exception:
+        app.logger.exception("Bulk text parsing failed")
         return render_template_string(
             TEMPLATE,
             single_form={"amazon_url": "", "quantity": 1, "note": "", "custom_specifics": "", "title_override": "", "price_override": "", "list_on_ebay": False},
@@ -352,7 +356,7 @@ def handle_bulk():
             single_result=None,
             bulk_results=None,
             logs=[],
-            error=str(exc),
+            error="Bulk processing failed. Please check server logs.",
             opened_urls=opened_urls,
         )
 

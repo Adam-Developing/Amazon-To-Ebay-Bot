@@ -162,7 +162,7 @@ Run the main script to start the web server:
 python main.py
 ```
 
-Then open your browser to [http://localhost:5000](http://localhost:5000) to access the UI:
+Then open your browser to [http://localhost:5000](http://localhost:5000) to access the UI (the included Flask server is for local/dev use; deploy with a production WSGI server such as gunicorn if needed):
 - **Single Item**: Paste an Amazon URL, quantity, note, optional fallback title/price, and custom specifics. You can optionally tick "List on eBay after scrape" to immediately create the listing.
 - **Bulk Items**: Paste bulk-formatted text and optionally enable automatic listing.
 - **Authentication**: When the backend needs eBay authorization, the required URL appears under "Action Needed"; open it in your browser to complete OAuth.
