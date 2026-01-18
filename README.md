@@ -137,6 +137,7 @@ EBAY_BUYER_FIXED_FEE=0.72              # Alternative name for fixed fee
 # Optional Settings
 CUSTOM_SPECIFICS=False                  # Prompt for custom specifics during listing
 DEFAULT_NEW_TAB_URL=https://www.google.com  # Default URL for new browser tabs
+FLASK_SECRET_KEY=change-me              # Optional secret key for Flask session signing
 ```
 
 ### Configuration Options Explained
@@ -149,6 +150,7 @@ DEFAULT_NEW_TAB_URL=https://www.google.com  # Default URL for new browser tabs
 - **SELLER_PAY_FEE**: If `True`, the app calculates the minimum price to cover eBay fees
 - **EBAY_FIXED_FEE**: The fixed fee eBay charges per listing (adjust based on your region)
 - **CUSTOM_SPECIFICS**: If `True`, prompts you to manually enter additional item specifics
+- **FLASK_SECRET_KEY**: Optional secret key used to sign Flask session cookies
 
 ## Running the Application
 

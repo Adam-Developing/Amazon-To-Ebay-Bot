@@ -182,7 +182,10 @@ def get_user_token_full_flow(io: IOBridge):
         server = HTTPServer(('', port), OAuthCallbackHandler)
     except OSError as exc:
         use_embedded_server = False
-        io.log(f"OAuth callback port {port} is busy ({exc}). Using external web callback instead.")
+        io.log(
+            f"OAuth callback port {port} is busy ({exc}). Ensure the web UI is running on "
+            f"{REDIRECT_URI_HOST} so the /callback route can receive the consent response."
+        )
     if use_embedded_server and server:
         thread = threading.Thread(target=server.serve_forever)
         thread.daemon = True

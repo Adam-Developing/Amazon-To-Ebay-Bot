@@ -44,12 +44,19 @@ let lastLogId = 0;
 let activePromptId = null;
 let lastPromptType = null;
 
-function postJson(url, payload) {
-    return fetch(url, {
+async function postJson(url, payload) {
+    const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload || {}),
-    }).then((response) => response.json().then((data) => ({ response, data })));
+    });
+    let data = {};
+    try {
+        data = await response.json();
+    } catch (error) {
+        data = {};
+    }
+    return { response, data };
 }
 
 function normalizeUrl(text) {
