@@ -155,11 +155,22 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
     custom_specifics = custom_specifics or {}
 
     parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or "amazon." not in parsed.netloc.lower():
+    allowed_hosts = (
+        "amazon.co.uk",
+        "amazon.com",
+        "amazon.de",
+        "amazon.fr",
+        "amazon.it",
+        "amazon.es",
+        "amazon.ca",
+        "amazon.com.au",
+    )
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or not any(parsed.netloc.lower().endswith(h) for h in allowed_hosts):
         raise ValueError("URL must be a valid Amazon product link.")
+    safe_url = f"https://{parsed.netloc}{parsed.path}"
 
     io.log("Sending Page Request")
-    page_request = requests.get(url, headers=headers)
+    page_request = requests.get(safe_url, headers=headers)
     io.log("Parsing page data")
     page_content = page_request.text
     page = BeautifulSoup(page_content, "html.parser")
@@ -173,7 +184,7 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
         pass
 
     prod_info_dict: Dict[str, Any] = {}
-    prod_info_dict['URL'] = url
+    prod_info_dict['URL'] = safe_url
     prod_info_dict['prodDetails'] = get_info(page, ids)
 
     try:
