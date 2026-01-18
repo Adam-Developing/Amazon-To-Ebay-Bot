@@ -24,6 +24,9 @@ from ui_bridge import IOBridge
 app = Flask(__name__)
 
 DEFAULT_NEW_TAB_URL = os.getenv("DEFAULT_NEW_TAB_URL", "https://www.google.com")
+MAX_LOG_ENTRIES = 1000
+PROMPT_TIMEOUT_SECONDS = 600
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 
 STATE_LOCK = threading.Lock()
 LOG_LOCK = threading.Lock()
@@ -87,6 +90,8 @@ def _append_log(msg: str) -> None:
     with LOG_LOCK:
         LOG_COUNTER += 1
         LOG_ENTRIES.append({"id": LOG_COUNTER, "message": entry})
+        if len(LOG_ENTRIES) > MAX_LOG_ENTRIES:
+            LOG_ENTRIES[: len(LOG_ENTRIES) - MAX_LOG_ENTRIES] = []
 
 
 def _queue_open_url(url: str) -> None:
@@ -129,10 +134,13 @@ def _await_prompt(prompt_type: str, prompt: str, default: str, options: List[str
             "options": options,
         }
         PROMPT_EVENTS[rid] = {"event": event, "value": None, "default": default}
-    event.wait()
+    resolved = event.wait(PROMPT_TIMEOUT_SECONDS)
     with PROMPT_LOCK:
         entry = PROMPT_EVENTS.pop(rid, None)
         ACTIVE_PROMPT = None
+    if not resolved:
+        _append_log("Prompt timed out; continuing with default value.")
+        return default
     if not entry:
         return default
     value = entry.get("value")
@@ -254,7 +262,10 @@ def api_load_json():
     if not file:
         return jsonify({"ok": False, "error": "No file uploaded."}), 400
     try:
-        data = json.loads(file.read().decode("utf-8"))
+        raw = file.read(MAX_UPLOAD_BYTES + 1)
+        if len(raw) > MAX_UPLOAD_BYTES:
+            return jsonify({"ok": False, "error": "Uploaded JSON file is too large."}), 413
+        data = json.loads(raw.decode("utf-8"))
     except Exception as exc:
         return jsonify({"ok": False, "error": f"Failed to parse JSON: {exc}"}), 400
     _set_product(data)
