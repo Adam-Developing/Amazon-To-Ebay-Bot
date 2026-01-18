@@ -1,17 +1,17 @@
 # Amazon-To-Ebay Bot
 
-An automated desktop application for scraping product information from Amazon UK and listing items on eBay with a user-friendly GUI. The application supports both single-item and bulk listing workflows with built-in browser functionality for authentication and verification.
+An automated web application for scraping product information from Amazon UK and listing items on eBay with a browser-based UI. The application supports both single-item and bulk listing workflows with a built-in browser panel for authentication and verification.
 
 ## Features
 
 - 🔍 **Amazon Product Scraping**: Automatically extracts product details, images, descriptions, and specifications from Amazon UK listings
 - 📦 **eBay Listing Automation**: Creates complete eBay listings with proper category mapping, item specifics, and pricing
-- 🖥️ **Modern GUI Interface**: Built with PyQt6 featuring an integrated web browser for seamless OAuth authentication
+- 🖥️ **Web UI Interface**: Browser-based experience featuring an integrated browser panel for seamless OAuth authentication
 - 📊 **Bulk Processing**: Process multiple products at once with pause/resume functionality
 - 💰 **Smart Pricing**: Automatic price adjustments and eBay fee calculations
 - 🔐 **Secure Authentication**: OAuth 2.0 integration with eBay APIs
 - 🎨 **Custom Specifics**: Support for custom item attributes and seller notes
-- 🌐 **Built-in Browser**: WebView2-powered browser tabs for managing Amazon and eBay pages
+- 🌐 **Built-in Browser**: Tabbed in-app browsing with optional external Edge-style mode for Amazon and eBay pages
 
 ## Table of Contents
 
@@ -29,7 +29,7 @@ An automated desktop application for scraping product information from Amazon UK
 Before installing the Amazon-To-Ebay Bot, ensure you have:
 
 - **Python 3.10 or higher** installed on your system
-- **Windows OS** (recommended for WebView2 support) or Linux/macOS with Qt dependencies
+- **Modern web browser** (Chrome, Edge, or Firefox recommended)
 - **Internet connection** for API access and web scraping
 - **eBay Developer Account** with active API credentials
 - **Git** (optional, for cloning the repository)
@@ -58,15 +58,14 @@ The application requires the following packages:
 - `requests` - HTTP library for API calls and web scraping
 - `beautifulsoup4` - HTML parsing for Amazon product pages
 - `python-dotenv` - Environment variable management
-- `PyQt6` - GUI framework
-- `PyQt6-WebEngine` - Embedded web browser functionality
+- `Flask` - Web server for the browser-based UI
 
 ### Step 3: Verify Installation
 
 Check that all dependencies are installed correctly:
 
 ```bash
-python -c "import requests, bs4, dotenv, PyQt6; print('All dependencies installed successfully!')"
+python -c "import requests, bs4, dotenv, flask; print('All dependencies installed successfully!')"
 ```
 
 ## eBay Developer Setup
@@ -161,9 +160,9 @@ Run the main script:
 python main.py
 ```
 
-This will launch the GUI application with the following interface:
+This will launch the web server. Open `http://localhost:5000` in your browser to access the interface:
 - **Left Panel**: Controls for single/bulk listing
-- **Right Panel**: Integrated web browser for Amazon and eBay
+- **Right Panel**: Integrated browser panel for Amazon and eBay
 
 ### First-Time Setup: Authenticate with eBay
 
@@ -172,7 +171,7 @@ This will launch the GUI application with the following interface:
 3. Log in with your eBay seller account
 4. **Grant permissions** to the application
 5. You'll be redirected back to `http://localhost:5000/callback`
-6. The app will display "Authentication Successful!"
+6. The web app will display "Authentication Successful!"
 7. Tokens are automatically saved to `ebay_tokens.json`
 
 **Note**: Tokens are refreshed automatically. Re-authorize if you see authentication errors.
@@ -304,9 +303,9 @@ To disconnect your eBay account:
 - Check that port 5000 is not blocked by a firewall
 - Try changing the port in both `.env` and your RuName configuration
 
-#### WebView2 browser not loading (Windows)
-- **Solution**: Install the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
-- Restart the application after installation
+#### Embedded browser panel not loading a site
+- **Solution**: Use the **Edge mode** toggle to open the URL in a new browser tab
+- Some sites may block iframe embedding and require external browsing
 
 #### Import errors (missing modules)
 - **Solution**: Reinstall dependencies: `pip install -r requirements.txt`
@@ -315,7 +314,7 @@ To disconnect your eBay account:
 ### Debug Mode
 
 To enable detailed logging:
-1. Open `gui.py`
+1. Open `web_app.py`
 2. Look for log statements and review console output
 3. Check `website.html` (saved during scraping) for raw Amazon page data
 
@@ -334,10 +333,10 @@ The application follows a modular architecture with clear separation of concerns
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         GUI Layer (gui.py)                  │
-│  - PyQt6 UI: Main window, tabs, browser, controls          │
-│  - Event handlers: Button clicks, keyboard shortcuts       │
-│  - Threading: Separate threads for blocking operations     │
+│                      Web Layer (web_app.py)                 │
+│  - Flask UI: Routes, prompts, log streaming, browser panel  │
+│  - Event handlers: Button clicks, keyboard shortcuts        │
+│  - Threading: Separate threads for blocking operations      │
 └────────────────┬────────────────────────────────────────────┘
                  │
       ┌──────────┴──────────┐
@@ -356,57 +355,32 @@ The application follows a modular architecture with clear separation of concerns
 ### File Structure and Functions
 
 #### `main.py` (Entry Point)
-**Purpose**: Application entry point that launches the GUI.
+**Purpose**: Application entry point that launches the web server.
 
 **Functions**:
-- `if __name__ == "__main__"`: Calls `run_gui()` to start the application
+- `if __name__ == "__main__"`: Calls `run_web()` to start the application
 
 **Location**: Root directory
 
 ---
 
-#### `gui.py` (GUI and Application Logic)
-**Purpose**: Contains the entire PyQt6-based graphical user interface, event handlers, and threading logic.
+#### `web_app.py` (Web UI and Application Logic)
+**Purpose**: Contains the Flask-based web interface, event handlers, and threading logic.
 
-**Key Classes**:
+**Key Components**:
 
-1. **`GUIIOBridge(IOBridge, QObject)`** (Lines 26-107)
-   - Bridges console I/O with GUI elements
-   - Handles logging, prompts, and URL opening in the GUI context
-   - Thread-safe signal-based communication
+1. **`WebIOBridge(IOBridge)`**
+   - Bridges console I/O with web prompts, logs, and URL opening
+   - Thread-safe queueing for prompts and browser events
 
-2. **`WebView2Tab(QWidget)`** (Lines 110-237)
-   - Embedded browser tab using QML WebView
-   - Provides navigation, URL loading, and title tracking
-   - Integrates with Microsoft Edge WebView2 on Windows
+2. **Flask Routes**
+   - `/` serves the web interface
+   - `/api/*` endpoints drive scraping, listing, bulk processing, and logging
+   - `/callback` handles OAuth redirects for eBay consent
 
-3. **`MainWindow(QWidget)`** (Lines 239-1265)
-   - Main application window with left panel (controls) and right panel (browser)
-   - Manages two tabs: "Single" and "Bulk"
-
-**Key Functions in `MainWindow`**:
-
-- **`__init__(self)`** (Line 268): Initializes the UI, connects signals, sets up browser tabs
-- **`on_auth(self)`** (Line 903): Handles eBay OAuth authentication flow
-- **`on_logout(self)`** (Line 926): Logs out from eBay by clearing user token
-- **`on_scrape(self)`** (Line 955): Scrapes Amazon product from URL
-- **`_on_scrape_done(self, product)`** (Line 986): Callback after scraping completes
-- **`on_list(self)`** (Line 1024): Lists scraped product on eBay
-- **`_on_list_done(self, res)`** (Line 1070): Callback after listing completes
-- **`on_process_bulk(self)`** (Line 1076): Processes bulk items
-- **`on_bulk_pause_resume(self)`** (Line 1046): Pauses or resumes bulk processing
-- **`on_bulk_cancel(self)`** (Line 1056): Cancels bulk processing
-- **`on_load_json(self)`** (Line 885): Loads a previously saved product JSON file
-- **`show_text_prompt(self, prompt, default, rid)`** (Line 753): Displays inline text prompt
-- **`show_choice_prompt(self, prompt, options, rid)`** (Line 767): Displays choice prompt
-- **`create_browser_tab(self, url)`** (Line 510): Creates a new browser tab
-- **`on_close_tab(self, index)`** (Line 541): Closes a browser tab
-- **`navigate_current(self, url)`** (Line 738): Navigates current tab to URL
-- **`on_addr_enter(self)`** (Line 670): Handles address bar Enter key
-- **`on_back(self)` / `on_forward(self)` / `on_reload(self)`** (Lines 1180-1202): Browser navigation
-- **`eventFilter(self, obj, event)`** (Line 1219): Global event filter for mouse back/forward buttons
-
-**`run_gui()`** (Line 1268): Initializes PyQt6 application and displays main window
+3. **Browser Panel**
+   - Managed in `static/app.js` with tab controls and navigation buttons
+   - Edge mode opens URLs in a new browser tab
 
 **Location**: Root directory
 
@@ -522,7 +496,7 @@ The application follows a modular architecture with clear separation of concerns
 
 - **`get_user_token_full_flow(io)`** (Line 136)
   - Performs full OAuth 2.0 authorization code flow
-  - Starts local HTTP server on port 5000 for callback
+  - Uses the `/callback` web route (or embedded server if needed) for the redirect
   - Opens browser for user consent
   - Exchanges authorization code for tokens
 
@@ -650,7 +624,7 @@ The application follows a modular architecture with clear separation of concerns
     - **`open_url(url)`**: Opens URL in browser (default: uses `webbrowser.open()`)
 
 **Usage**:
-- GUI subclasses `IOBridge` to provide interactive implementations (see `GUIIOBridge` in `gui.py`)
+- The web UI subclasses `IOBridge` via `WebIOBridge` to provide interactive prompts and logging
 - Core logic functions accept `IOBridge` to remain UI-agnostic
 
 **Location**: Root directory
@@ -701,15 +675,14 @@ The application follows a modular architecture with clear separation of concerns
 
 ### Key Technologies
 
-- **PyQt6**: Modern Python GUI framework
+- **Flask**: Python web server for the browser-based UI
+- **HTML/CSS/JavaScript**: Frontend for the in-browser controls and browser panel
 - **Beautiful Soup 4**: HTML parsing for web scraping
 - **Requests**: HTTP client for API calls
 - **eBay APIs**:
   - **Trading API** (XML): Legacy API for listing items (`AddItem`, `SetUserNotes`)
   - **Taxonomy API** (REST): Category and item specifics discovery
   - **OAuth 2.0**: Authentication and authorization
-- **WebView2**: Microsoft Edge-based embedded browser (Windows)
-- **QML WebView**: Cross-platform web view component
 
 ### API Endpoints
 
@@ -720,9 +693,9 @@ The application follows a modular architecture with clear separation of concerns
 
 ### Threading Model
 
-- **Main Thread**: GUI event loop (PyQt6)
+- **Main Thread**: Flask web server request handling
 - **Worker Threads**: Created for blocking operations (scraping, listing, authentication)
-- **Signals**: Qt signals (`pyqtSignal`) for thread-safe communication between workers and GUI
+- **Shared State**: Locked in-memory structures for logs, prompts, and bulk progress
 
 ### File Outputs
 
@@ -730,7 +703,6 @@ The application follows a modular architecture with clear separation of concerns
 - **product.json**: Last scraped single product
 - **bulk_products/product_N.json**: Bulk scraped products
 - **website.html**: Debug HTML from Amazon page
-- **web_profile/**: Persistent browser profile data
 
 ## Contributing
 
@@ -755,14 +727,12 @@ For issues, questions, or feature requests:
 
 ## Changelog
 
-**v1.0** (Current)
-- Initial release with GUI
+**v2.0** (Current)
+- Web-based UI with embedded browser panel
 - Single and bulk listing support
 - OAuth 2.0 integration
-- WebView2 browser integration
 - Automatic category and specifics mapping
 
 ---
 
 **Happy Listing! 🚀**
-

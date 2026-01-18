@@ -5,6 +5,7 @@ import json
 import time
 import base64
 import threading
+from typing import Optional
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -23,6 +24,29 @@ user_SCOPES = "https://api.ebay.com/oauth/api_scope/sell.inventory https://api.e
 application_SCOPES = "https://api.ebay.com/oauth/api_scope"
 TOKENS_FILE = "ebay_tokens.json"
 API_ENDPOINT = "https://api.ebay.com/identity/v1/oauth2/token"
+
+_OAUTH_CODE_LOCK = threading.Lock()
+_OAUTH_CODE_EVENT = threading.Event()
+_OAUTH_CODE_VALUE: Optional[str] = None
+
+
+def set_oauth_callback_code(code: str) -> None:
+    """Allow external web servers to pass the OAuth code back to this module."""
+    global _OAUTH_CODE_VALUE
+    with _OAUTH_CODE_LOCK:
+        _OAUTH_CODE_VALUE = code
+        _OAUTH_CODE_EVENT.set()
+
+
+def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
+    """Block until an external callback provides the OAuth code."""
+    io.log("Waiting for authorization code via web callback…")
+    _OAUTH_CODE_EVENT.wait()
+    with _OAUTH_CODE_LOCK:
+        code = _OAUTH_CODE_VALUE
+        _OAUTH_CODE_VALUE = None
+        _OAUTH_CODE_EVENT.clear()
+        return code
 
 
 def save_tokens(tokens, io: IOBridge):
@@ -135,6 +159,8 @@ def refresh_user_token(refresh_token_value, io: IOBridge):
 
 def get_user_token_full_flow(io: IOBridge):
     auth_code = None
+    server = None
+    use_embedded_server = True
 
     class OAuthCallbackHandler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -152,19 +178,30 @@ def get_user_token_full_flow(io: IOBridge):
                 self.wfile.write(b"Authentication failed.")
 
     port = int(urlparse(REDIRECT_URI_HOST).port)
-    server = HTTPServer(('', port), OAuthCallbackHandler)
-    thread = threading.Thread(target=server.serve_forever)
-    thread.daemon = True
-    thread.start()
+    try:
+        server = HTTPServer(('', port), OAuthCallbackHandler)
+    except OSError as exc:
+        use_embedded_server = False
+        io.log(f"OAuth callback port {port} is busy ({exc}). Using external web callback instead.")
+    if use_embedded_server and server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.daemon = True
+        thread.start()
 
     consent_url = f"https://auth.ebay.com/oauth2/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={RUNAME}&scope={user_SCOPES}"
     io.log("Opening browser for eBay consent…")
     io.open_url(consent_url)
 
     io.log("Waiting for authorization code…")
-    while not auth_code:
-        time.sleep(0.5)
-    server.shutdown()
+    if use_embedded_server and server:
+        while not auth_code:
+            time.sleep(0.5)
+        server.shutdown()
+    else:
+        auth_code = _wait_for_external_oauth_code(io)
+        if not auth_code:
+            io.log("No authorization code received.")
+            return None
     io.log("Authorization code received.")
 
     io.log("Exchanging authorization code for access token…")

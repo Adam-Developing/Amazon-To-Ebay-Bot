@@ -60,65 +60,21 @@ Quick reference for finding specific functions in the Amazon-To-Ebay Bot codebas
 | `parse_bulk_items()` | 34 | Parses bulk text into structured item data |
 | `_parse_specifics_line()` | 17 | Parses custom specifics line |
 
-### GUI Functions (gui.py)
-
-#### Main Window Functions
+### Web UI Functions (web_app.py)
 
 | Function | Line | Purpose |
 |----------|------|---------|
-| `__init__()` | 268 | Initializes main window UI |
-| `on_auth()` | 903 | Handles eBay OAuth authentication |
-| `on_logout()` | 926 | Logs out from eBay |
-| `on_scrape()` | 955 | Scrapes Amazon product |
-| `_on_scrape_done()` | 986 | Callback after scraping completes |
-| `on_list()` | 1024 | Lists product on eBay |
-| `_on_list_done()` | 1070 | Callback after listing completes |
-| `on_process_bulk()` | 1076 | Processes bulk items |
-| `on_bulk_pause_resume()` | 1046 | Pauses/resumes bulk processing |
-| `on_bulk_cancel()` | 1056 | Cancels bulk processing |
-| `on_load_json()` | 885 | Loads product from JSON file |
-
-#### Browser Functions
-
-| Function | Line | Purpose |
-|----------|------|---------|
-| `create_browser_tab()` | 510 | Creates new browser tab |
-| `on_close_tab()` | 541 | Closes browser tab |
-| `navigate_current()` | 738 | Navigates current tab to URL |
-| `on_addr_enter()` | 670 | Handles address bar Enter key |
-| `on_back()` | 1180 | Browser back navigation |
-| `on_forward()` | 1188 | Browser forward navigation |
-| `on_reload()` | 1196 | Reloads current page |
-| `_on_view_url_changed()` | 525 | Updates UI when URL changes |
-| `_update_tab_title()` | 534 | Updates tab title |
-| `on_tab_changed()` | 612 | Handles tab switch |
-
-#### Prompt Functions
-
-| Function | Line | Purpose |
-|----------|------|---------|
-| `show_text_prompt()` | 753 | Displays inline text input prompt |
-| `show_choice_prompt()` | 767 | Displays inline choice prompt |
-| `_on_prompt_ok()` | 851 | Handles prompt OK button |
-| `_on_prompt_cancel()` | 864 | Handles prompt Cancel button |
-| `_highlight_then_fade()` | 782 | Highlights widget with fade animation |
-
-#### Utility Functions
-
-| Function | Line | Purpose |
-|----------|------|---------|
-| `append_log()` | 872 | Appends message to log view |
-| `on_toggle_log()` | 877 | Shows/hides log view |
-| `set_processing()` | 1140 | Enables/disables UI during processing |
-| `_refresh_nav()` | 253 | Updates browser navigation buttons |
-| `_switch_tab()` | 1153 | Switches to next/previous browser tab |
-| `eventFilter()` | 1219 | Global event filter for mouse buttons |
-
-#### Main Entry Point
-
-| Function | Line | Purpose |
-|----------|------|---------|
-| `run_gui()` | 1268 | Initializes and runs PyQt6 application |
+| `run_web()` | 462 | Starts the Flask web server |
+| `api_state()` | 197 | Returns UI state for button enablement |
+| `api_logs()` | 208 | Streams log entries to the browser |
+| `api_prompts()` | 226 | Returns pending prompts for user input |
+| `api_load_json()` | 249 | Loads product JSON into the UI |
+| `api_scrape()` | 316 | Starts Amazon scraping in a worker thread |
+| `api_list()` | 353 | Starts eBay listing in a worker thread |
+| `api_bulk_process()` | 381 | Starts bulk processing workflow |
+| `api_bulk_pause()` | 436 | Pauses or resumes bulk processing |
+| `api_bulk_cancel()` | 451 | Cancels bulk processing |
+| `oauth_callback()` | 188 | Handles OAuth redirect back to the web app |
 
 ### UI Bridge Functions (ui_bridge.py)
 
@@ -161,12 +117,11 @@ Quick reference for finding specific functions in the Amazon-To-Ebay Bot codebas
 - **Specifics parsing**: `_parse_specifics_line()` (line 17)
 - **Common keys**: `COMMON_SPEC_KEYS` (lines 5-11)
 
-### To modify GUI layout or behavior:
-- **File**: `gui.py`
-- **Main window**: `MainWindow.__init__()` (line 268)
-- **Single tab**: Lines 299-338
-- **Bulk tab**: Lines 341-358
-- **Browser panel**: Lines 389-424
+### To modify web UI layout or behavior:
+- **Backend routes**: `web_app.py`
+- **HTML structure**: `templates/index.html`
+- **Browser panel logic**: `static/app.js`
+- **Styling**: `static/styles.css`
 
 ### To modify pricing calculations:
 - **File**: `CentralFunctions.py`
@@ -190,13 +145,16 @@ Quick reference for finding specific functions in the Amazon-To-Ebay Bot codebas
 ```
 Amazon-To-Ebay-Bot/
 ├── main.py                  # Entry point (5 lines)
-├── gui.py                   # GUI application (1306 lines)
+├── web_app.py               # Web application (468 lines)
+├── gui.py                   # Legacy GUI application (1306 lines)
 ├── amazon.py                # Amazon scraping (247 lines)
 ├── ebay.py                  # eBay listing (344 lines)
 ├── tokens.py                # OAuth management (210 lines)
 ├── CentralFunctions.py      # Utilities (395 lines)
 ├── bulk_parser.py           # Bulk parsing (87 lines)
 ├── ui_bridge.py             # UI abstraction (26 lines)
+├── templates/               # HTML templates
+├── static/                  # Web UI assets (JS/CSS)
 ├── requirements.txt         # Python dependencies
 ├── .env                     # Environment variables
 ├── webview.qml              # QML web view component
