@@ -261,7 +261,7 @@ def handle_single():
             error = f"Additional input required: {mp.prompt}"
         except Exception:
             app.logger.exception("Single item processing failed")
-            error = "An unexpected error occurred. Please check server logs."
+            error = "An unexpected error occurred. Please verify the Amazon URL and try again, or check server logs."
 
     single_result = None
     if product:
@@ -343,7 +343,7 @@ def handle_bulk():
                         "listed": False,
                         "item_id": None,
                         "logs": io.logs,
-                        "error": "An unexpected error occurred. Please check server logs.",
+                        "error": "Unexpected error for this item. Verify the Amazon URL/quantity and retry. See server logs for details.",
                     }
                 )
             opened_urls.extend(io.opened_urls)
@@ -356,7 +356,7 @@ def handle_bulk():
             single_result=None,
             bulk_results=None,
             logs=[],
-            error="Bulk processing failed. Please check server logs.",
+            error="Bulk processing failed. Ensure the bulk text follows the documented format and check server logs.",
             opened_urls=opened_urls,
         )
 
@@ -375,6 +375,8 @@ def handle_bulk():
 def run():
     host = os.getenv("HOST", "127.0.0.1")
     app.logger.warning("Running built-in Flask development server; use a production WSGI server (e.g., gunicorn) for deployment.")
+    if host == "0.0.0.0":
+        app.logger.warning("HOST=0.0.0.0 will expose the app on all interfaces; ensure this is intentional and secured.")
     app.run(host=host, port=int(os.getenv("PORT", 5000)), debug=False)
 
 
