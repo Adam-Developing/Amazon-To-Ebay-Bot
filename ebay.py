@@ -115,7 +115,7 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
         except Exception:
             pass
 
-    if bool(os.getenv("SELLER_PAY_FEE").lower() == "true"):
+    if bool((os.getenv("SELLER_PAY_FEE") or "").lower() == "true"):
         price_variable = find_minimum_price(price_variable)
 
     # Quantity & Seller note (prefer JSON if present)

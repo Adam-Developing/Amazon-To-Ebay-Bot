@@ -262,8 +262,10 @@ TEMPLATE = """
         const errorBlock = r.error ? `<div class="error">Error: ${r.error}</div>` : '';
         const listed = r.listing && r.listing.ok ? 'Yes' : 'No';
         const itemId = r.listing?.item_id ? `<div class="small">Item ID: ${r.listing.item_id}</div>` : '';
+        const status = r.status ? `<div class="small"><strong>Status:</strong> ${r.status}</div>` : '';
         return `<li>
             <div><strong>${idx + 1}.</strong> ${r.url || ''} — ${r.product?.Title || 'Title pending'} (Listed: ${listed})</div>
+            ${status}
             ${itemId}
             ${errorBlock}
             ${logsBlock}
@@ -503,11 +505,22 @@ def api_bulk():
                         "product": product,
                         "listing": listing,
                         "logs": io.logs,
+                        "status": "ok",
                         "error": None,
                     }
                 )
             except MissingPrompt as mp:
                 app.logger.info("Bulk item additional input required: %s", mp.prompt)
+                results.append(
+                    {
+                        "url": item.get("url"),
+                        "product": None,
+                        "listing": None,
+                        "logs": io.logs,
+                        "status": "prompt",
+                        "error": "Additional input required to continue. Please provide the missing configuration.",
+                    }
+                )
                 opened_urls.extend(io.opened_urls)
                 combined_logs.extend(io.logs)
                 return jsonify(
@@ -520,6 +533,7 @@ def api_bulk():
                         "next_index": idx,
                         "opened_urls": opened_urls,
                         "logs": combined_logs,
+                        "current_item_url": item.get("url"),
                     }
                 )
             except Exception:
@@ -530,6 +544,7 @@ def api_bulk():
                         "product": None,
                         "listing": None,
                         "logs": io.logs,
+                        "status": "error",
                         "error": "Unexpected error for this item. Verify the Amazon URL/quantity and retry. See server logs for details.",
                     }
                 )
