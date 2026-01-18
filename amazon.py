@@ -71,32 +71,50 @@ def handle_html_content(page, id):
     element = page.find(id=id)
     return str(element) if element else None
 
+def get_image_urls(page):
+    # 1. Find the specific script tag containing the image data
+    # We look for a script tag that contains the string 'ImageBlockATF'
+    script_tag = page.find('script', string=re.compile(r'ImageBlockATF'))
 
-def get_image_urls(soup):
-    # Find the script block that initializes the image block data
-    script_tag = soup.find('script', string=lambda s: isinstance(s, str) and 'ImageBlockATF' in s)
-    if not script_tag or not script_tag.string:
+    if not script_tag:
         return []
+
     script_content = script_tag.string
-    # Extract the `var data = {...};` object
-    match = re.search(r"var\s+data\s*=\s*({.*});", script_content, re.DOTALL)
+    if not script_content:
+        return []
+
+    # 2. Extract the object inside 'var data = { ... };'
+    match = re.search(r"var\s+data\s*=\s*({.*?});", script_content, re.DOTALL)
     if not match:
         return []
-    js_object_str = match.group(1)
-    py_literal_str = js_object_str.replace('null', 'None').replace('false', 'False').replace('true', 'True')
-    py_literal_str = re.sub(r'Date\.now\(\)', 'None', py_literal_str)
-    try:
-        data_obj = ast.literal_eval(py_literal_str)
-        initial_images = data_obj.get('colorImages', {}).get('initial', [])
-        hi_res_urls = [img.get('hiRes') for img in initial_images if isinstance(img, dict) and img.get('hiRes')]
-        ordered_unique_urls: list[str] = []
-        for u in hi_res_urls:
-            if u not in ordered_unique_urls:
-                ordered_unique_urls.append(u)
-        return ordered_unique_urls
-    except (ValueError, SyntaxError, KeyError):
-        return []
 
+    js_obj = match.group(1)
+
+    # 3. Clean the string to make it valid JSON
+    # Remove JavaScript comments (////// ...)
+    js_obj = re.sub(r"(?<!https:)(?<!http:)//.*", "", js_obj)
+
+    # Replace single quotes with double quotes for keys and values
+    # Regex handles keys: 'key': -> "key":
+    js_obj = re.sub(r"'(.*?)'\s*:", r'"\1":', js_obj)
+    # Remaining single quotes for values: 'value' -> "value"
+    js_obj = js_obj.replace("'", '"')
+
+    # 4. Handle JS-specific values
+    js_obj = re.sub(r"Date\.now\(\)", "null", js_obj)
+    js_obj = js_obj.replace("false", "false").replace("true", "true").replace("null", "null")
+
+    # 5. Clean up trailing commas (common in JS, illegal in JSON)
+    js_obj = re.sub(r",\s*}", "}", js_obj)
+    js_obj = re.sub(r",\s*]", "]", js_obj)
+
+    try:
+        data_obj = json.loads(js_obj)
+        initial_images = data_obj.get('colorImages', {}).get('initial', [])
+        return [img.get('hiRes') for img in initial_images if isinstance(img, dict) and img.get('hiRes')]
+    except json.JSONDecodeError as e:
+        print(f"JSON decoding error: {e}")
+        return []
 
 ids = ['prodDetails', 'tech']
 

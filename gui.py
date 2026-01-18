@@ -128,8 +128,7 @@ class WebView2Tab(QWidget):
             pass
         try:
             norm_profile_dir = profile_dir.replace('\\', '/')
-            self.quick.rootContext().setContextProperty("webProfilePath",
-                                                        norm_profile_dir)  # type: ignore[attr-defined]
+            self.quick.rootContext().setContextProperty("webProfilePath", norm_profile_dir)
         except Exception:
             pass
         # Load QML scene
