@@ -374,6 +374,7 @@ def handle_bulk():
 
 def run():
     host = os.getenv("HOST", "127.0.0.1")
+    app.logger.warning("Running built-in Flask development server; use a production WSGI server (e.g., gunicorn) for deployment.")
     app.run(host=host, port=int(os.getenv("PORT", 5000)), debug=False)
 
 
