@@ -4,6 +4,7 @@ import requests
 import json
 import re
 import ast
+from urllib.parse import urlparse
 from typing import Dict, Any, Optional
 from bs4 import BeautifulSoup
 from ui_bridge import IOBridge
@@ -152,6 +153,10 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
     """Scrape an Amazon product page and return a product dict."""
     io = io or IOBridge()
     custom_specifics = custom_specifics or {}
+
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or "amazon." not in parsed.netloc.lower():
+        raise ValueError("URL must be a valid Amazon product link.")
 
     io.log("Sending Page Request")
     page_request = requests.get(url, headers=headers)
