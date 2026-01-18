@@ -11,8 +11,24 @@ from bulk_parser import _parse_specifics_line, parse_bulk_items
 from ebay import list_on_ebay
 from ui_bridge import IOBridge
 
+def _load_secret_key() -> str:
+    env_key = os.getenv("SECRET_KEY")
+    if env_key:
+        return env_key
+    key_path = os.path.join(os.path.dirname(__file__), ".flask_secret_key")
+    if os.path.exists(key_path):
+        with open(key_path, "r", encoding="utf-8") as fh:
+            existing = fh.read().strip()
+            if existing:
+                return existing
+    generated = secrets.token_hex(32)
+    with open(key_path, "w", encoding="utf-8") as fh:
+        fh.write(generated)
+    return generated
+
+
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+app.config["SECRET_KEY"] = _load_secret_key()
 
 
 class MissingPrompt(Exception):
@@ -258,7 +274,8 @@ def handle_single():
             if form.get("list_on_ebay"):
                 listing = list_on_ebay(product, io)
         except MissingPrompt as mp:
-            error = f"Additional input required: {mp.prompt}"
+            app.logger.info("Additional input required: %s", mp.prompt)
+            error = "Additional input required to continue. Please provide the missing configuration."
         except Exception:
             app.logger.exception("Single item processing failed")
             error = "An unexpected error occurred. Please verify the Amazon URL and try again, or check server logs."
@@ -324,6 +341,7 @@ def handle_bulk():
                     }
                 )
             except MissingPrompt as mp:
+                app.logger.info("Bulk item additional input required: %s", mp.prompt)
                 bulk_results.append(
                     {
                         "url": item.get("url"),
@@ -331,7 +349,7 @@ def handle_bulk():
                         "listed": False,
                         "item_id": None,
                         "logs": io.logs,
-                        "error": f"Additional input required: {mp.prompt}",
+                        "error": "Additional input required to continue. Please provide the missing configuration.",
                     }
                 )
             except Exception:
@@ -376,6 +394,8 @@ def run():
     host = os.getenv("HOST", "127.0.0.1")
     app.logger.warning("Running built-in Flask development server; use a production WSGI server (e.g., gunicorn) for deployment.")
     if host == "0.0.0.0":
+        if os.getenv("ALLOW_BIND_ALL", "").lower() != "true":
+            raise RuntimeError("Binding to 0.0.0.0 requires ALLOW_BIND_ALL=true to acknowledge exposure.")
         app.logger.warning("HOST=0.0.0.0 will expose the app on all interfaces; ensure this is intentional and secured.")
     app.run(host=host, port=int(os.getenv("PORT", 5000)), debug=False)
 
