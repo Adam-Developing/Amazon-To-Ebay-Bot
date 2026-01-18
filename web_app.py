@@ -11,6 +11,7 @@ from ebay import list_on_ebay
 from ui_bridge import IOBridge
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key")
 
 
 class MissingPrompt(Exception):
@@ -168,7 +169,7 @@ TEMPLATE = """
             {% if res.logs %}
               <details>
                 <summary>Logs</summary>
-                <pre>{{ res.logs|join("\\n") }}</pre>
+                <pre>{{ res.logs|join("\n") }}</pre>
               </details>
             {% endif %}
           </li>
@@ -191,7 +192,7 @@ TEMPLATE = """
   {% if logs %}
     <section>
       <h3>Backend Logs</h3>
-      <pre>{{ logs|join("\\n") }}</pre>
+      <pre>{{ logs|join("\n") }}</pre>
     </section>
   {% endif %}
 </body>
@@ -368,7 +369,8 @@ def handle_bulk():
 
 
 def run():
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=False)
+    host = os.getenv("HOST", "127.0.0.1")
+    app.run(host=host, port=int(os.getenv("PORT", 5000)), debug=False)
 
 
 if __name__ == "__main__":
