@@ -1,12 +1,12 @@
 # Amazon-To-Ebay Bot
 
-An automated desktop application for scraping product information from Amazon UK and listing items on eBay with a user-friendly GUI. The application supports both single-item and bulk listing workflows with built-in browser functionality for authentication and verification.
+An automated web application for scraping product information from Amazon UK and listing items on eBay with a browser-based UI. The application supports both single-item and bulk listing workflows with built-in flows for authentication and verification.
 
 ## Features
 
 - 🔍 **Amazon Product Scraping**: Automatically extracts product details, images, descriptions, and specifications from Amazon UK listings
 - 📦 **eBay Listing Automation**: Creates complete eBay listings with proper category mapping, item specifics, and pricing
-- 🖥️ **Modern GUI Interface**: Built with PyQt6 featuring an integrated web browser for seamless OAuth authentication
+- 🖥️ **Web Interface**: Flask-powered pages for single and bulk listing flows
 - 📊 **Bulk Processing**: Process multiple products at once with pause/resume functionality
 - 💰 **Smart Pricing**: Automatic price adjustments and eBay fee calculations
 - 🔐 **Secure Authentication**: OAuth 2.0 integration with eBay APIs
@@ -58,6 +58,7 @@ The application requires the following packages:
 - `requests` - HTTP library for API calls and web scraping
 - `beautifulsoup4` - HTML parsing for Amazon product pages
 - `python-dotenv` - Environment variable management
+- `Flask` - Lightweight web server for the browser UI
 - `PyQt6` - GUI framework
 - `PyQt6-WebEngine` - Embedded web browser functionality
 
@@ -155,15 +156,16 @@ DEFAULT_NEW_TAB_URL=https://www.google.com  # Default URL for new browser tabs
 
 ### Start the Application
 
-Run the main script:
+Run the main script to start the web server:
 
 ```bash
 python main.py
 ```
 
-This will launch the GUI application with the following interface:
-- **Left Panel**: Controls for single/bulk listing
-- **Right Panel**: Integrated web browser for Amazon and eBay
+Then open your browser to [http://localhost:5000](http://localhost:5000) to access the UI:
+- **Single Item**: Paste an Amazon URL, quantity, note, optional fallback title/price, and custom specifics. You can optionally tick "List on eBay after scrape" to immediately create the listing.
+- **Bulk Items**: Paste bulk-formatted text and optionally enable automatic listing.
+- **Authentication**: When the backend needs eBay authorization, the required URL appears under "Action Needed"; open it in your browser to complete OAuth.
 
 ### First-Time Setup: Authenticate with eBay
 
@@ -765,4 +767,3 @@ For issues, questions, or feature requests:
 ---
 
 **Happy Listing! 🚀**
-
