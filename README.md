@@ -150,7 +150,7 @@ FLASK_SECRET_KEY=change-me              # Optional secret key for Flask session 
 - **SELLER_PAY_FEE**: If `True`, the app calculates the minimum price to cover eBay fees
 - **EBAY_FIXED_FEE**: The fixed fee eBay charges per listing (adjust based on your region)
 - **CUSTOM_SPECIFICS**: If `True`, prompts you to manually enter additional item specifics
-- **FLASK_SECRET_KEY**: Optional secret key used to sign Flask session cookies
+- **FLASK_SECRET_KEY**: Optional secret key used to sign Flask session cookies (set it to keep sessions stable across restarts)
 
 ## Running the Application
 

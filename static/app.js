@@ -54,6 +54,7 @@ async function postJson(url, payload) {
     try {
         data = await response.json();
     } catch (error) {
+        console.warn("Failed to parse JSON response", error);
         data = {};
     }
     return { response, data };
@@ -78,6 +79,7 @@ function deriveTitle(url) {
         const parsed = new URL(url);
         return parsed.hostname || url;
     } catch (error) {
+        console.warn("Unable to derive title from URL", error);
         return url || "Tab";
     }
 }

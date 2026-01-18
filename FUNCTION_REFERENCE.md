@@ -64,17 +64,17 @@ Quick reference for finding specific functions in the Amazon-To-Ebay Bot codebas
 
 | Function | Line | Purpose |
 |----------|------|---------|
-| `run_web()` | 479 | Starts the Flask web server |
-| `api_state()` | 211 | Returns UI state for button enablement |
-| `api_logs()` | 222 | Streams log entries to the browser |
-| `api_prompts()` | 240 | Returns pending prompts for user input |
-| `api_load_json()` | 260 | Loads product JSON into the UI |
-| `api_scrape()` | 330 | Starts Amazon scraping in a worker thread |
-| `api_list()` | 367 | Starts eBay listing in a worker thread |
-| `api_bulk_process()` | 395 | Starts bulk processing workflow |
-| `api_bulk_pause()` | 453 | Pauses or resumes bulk processing |
-| `api_bulk_cancel()` | 468 | Cancels bulk processing |
-| `oauth_callback()` | 202 | Handles OAuth redirect back to the web app |
+| `run_web()` | 485 | Starts the Flask web server |
+| `api_state()` | 217 | Returns UI state for button enablement |
+| `api_logs()` | 228 | Streams log entries to the browser |
+| `api_prompts()` | 246 | Returns pending prompts for user input |
+| `api_load_json()` | 269 | Loads product JSON into the UI |
+| `api_scrape()` | 339 | Starts Amazon scraping in a worker thread |
+| `api_list()` | 376 | Starts eBay listing in a worker thread |
+| `api_bulk_process()` | 404 | Starts bulk processing workflow |
+| `api_bulk_pause()` | 459 | Pauses or resumes bulk processing |
+| `api_bulk_cancel()` | 474 | Cancels bulk processing |
+| `oauth_callback()` | 208 | Handles OAuth redirect back to the web app |
 
 ### UI Bridge Functions (ui_bridge.py)
 
@@ -145,7 +145,7 @@ Quick reference for finding specific functions in the Amazon-To-Ebay Bot codebas
 ```
 Amazon-To-Ebay-Bot/
 ├── main.py                  # Entry point (5 lines)
-├── web_app.py               # Web application (487 lines)
+├── web_app.py               # Web application (498 lines)
 ├── gui.py                   # Legacy GUI application (1306 lines)
 ├── amazon.py                # Amazon scraping (247 lines)
 ├── ebay.py                  # eBay listing (344 lines)

@@ -28,7 +28,13 @@ MAX_LOG_ENTRIES = 1000
 PROMPT_TIMEOUT_SECONDS = 600
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 
-app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24))
+FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
+EPHEMERAL_SECRET = False
+if not FLASK_SECRET_KEY:
+    FLASK_SECRET_KEY = os.urandom(24)
+    EPHEMERAL_SECRET = True
+
+app.secret_key = FLASK_SECRET_KEY
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
 STATE_LOCK = threading.Lock()
@@ -269,7 +275,7 @@ def api_load_json():
         if len(raw) > MAX_UPLOAD_BYTES:
             return jsonify({"ok": False, "error": "Uploaded JSON file is too large."}), 413
         data = json.loads(raw.decode("utf-8"))
-    except Exception as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, OSError) as exc:
         return jsonify({"ok": False, "error": f"Failed to parse JSON: {exc}"}), 400
     _set_product(data)
     _append_log(f"Loaded product from {file.filename}")
@@ -343,7 +349,7 @@ def api_scrape():
     if quantity not in (None, ""):
         try:
             qty_value = int(quantity)
-        except Exception:
+        except (ValueError, TypeError):
             qty_value = None
     custom_specs_raw = str(payload.get("custom_specs", "")).strip()
     custom_specs = _parse_custom_specifics(custom_specs_raw) if custom_specs_raw else {}
@@ -357,7 +363,7 @@ def api_scrape():
             try:
                 with open("product.json", "w", encoding="utf-8") as handle:
                     json.dump(product, handle, indent=2)
-            except Exception as exc:
+            except (OSError, TypeError, ValueError) as exc:
                 WEB_IO.log(f"Failed to write product.json: {exc}")
         finally:
             _set_processing(False)
@@ -478,7 +484,12 @@ def api_bulk_cancel():
 
 def run_web(host: str = "127.0.0.1", port: int = 5000) -> None:
     if host not in {"127.0.0.1", "localhost"}:
-        _append_log("Warning: binding to a non-local host can expose the web UI.")
+        _append_log(
+            "Warning: binding to a non-local host exposes the web UI to external connections without "
+            "authentication. Use only on trusted networks."
+        )
+    if EPHEMERAL_SECRET:
+        _append_log("FLASK_SECRET_KEY not set; sessions will reset on each restart.")
     _append_log("Starting web UI...")
     app.run(host=host, port=port, debug=False)
 
