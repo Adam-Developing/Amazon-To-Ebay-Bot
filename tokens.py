@@ -68,7 +68,7 @@ def _poll_oauth_code() -> Optional[str]:
     if os.path.exists(code_file):
         try:
             mode = stat.S_IMODE(os.stat(code_file).st_mode)
-            if mode & 0o077:
+            if mode & 0o177:
                 _LOGGER.warning("OAuth code file permissions are insecure; ignoring file.")
                 code = None
             else:
@@ -104,6 +104,8 @@ def set_oauth_callback_code(code: str) -> None:
             fd = os.open(code_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(code)
+        except FileExistsError:
+            _LOGGER.warning("OAuth code file already exists; unable to write.")
         except OSError:
             _LOGGER.warning("Failed to write OAuth code file.")
 
