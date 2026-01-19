@@ -51,6 +51,18 @@ Size: L | Colour: Red
                 <button id="bulkPauseBtn" type="button" class="secondary" hidden>Pause</button>
                 <button id="bulkCancelBtn" type="button" class="secondary" hidden>Cancel</button>
             </div>
+            <div class="bulk-preview">
+                <div id="bulkMeta" class="bulk-summary">Paste bulk text to preview items.</div>
+                <div id="bulkItems" class="bulk-items"></div>
+            </div>
+        </div>
+
+        <div class="status-card">
+            <div class="status-header">
+                <span class="status-title">Status</span>
+                <span id="statusBadge" class="status-pill" data-tone="idle">Idle</span>
+            </div>
+            <div id="statusMessage" class="status-message">Ready to start.</div>
         </div>
 
         <div id="promptPanel" class="prompt-panel" hidden>

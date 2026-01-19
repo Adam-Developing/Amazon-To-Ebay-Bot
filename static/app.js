@@ -21,12 +21,26 @@ const elements = {
     promptCancel: document.getElementById("promptCancel"),
     toggleLogBtn: document.getElementById("toggleLogBtn"),
     logView: document.getElementById("logView"),
+    statusBadge: document.getElementById("statusBadge"),
+    statusMessage: document.getElementById("statusMessage"),
+    bulkItems: document.getElementById("bulkItems"),
+    bulkMeta: document.getElementById("bulkMeta"),
     panelTabs: document.querySelectorAll(".panel-tab"),
     panelBodies: document.querySelectorAll(".panel-body"),
 };
 let lastLogId = 0;
 let activePromptId = null;
 let lastPromptType = null;
+let bulkPreviewTimeout = null;
+
+const BULK_STATUS_TONES = {
+    Ready: "idle",
+    Scraping: "working",
+    Listing: "working",
+    Listed: "success",
+    Failed: "error",
+    Cancelled: "warning",
+};
 
 async function postJson(url, payload) {
     const response = await fetch(url, {
@@ -88,6 +102,14 @@ function hidePrompt() {
     elements.promptPanel.hidden = true;
 }
 
+async function submitPrompt(value) {
+    if (activePromptId === null) {
+        return;
+    }
+    await postJson(`/api/prompts/${activePromptId}`, { value });
+    hidePrompt();
+}
+
 async function refreshPrompt() {
     const response = await fetch("/api/prompts");
     const data = await response.json();
@@ -120,12 +142,35 @@ async function refreshState() {
     elements.authBtn.disabled = data.processing;
     elements.logoutBtn.disabled = data.processing;
 
+    const status = data.status || {};
+    const statusLabel = status.label || (data.processing ? "Working" : "Idle");
+    const statusMessage = status.message || (data.processing ? "Working..." : "Ready to start.");
+    const statusTone = status.tone || (data.processing ? "working" : "idle");
+    if (elements.statusBadge) {
+        elements.statusBadge.textContent = statusLabel;
+        elements.statusBadge.dataset.tone = statusTone;
+    }
+    if (elements.statusMessage) {
+        elements.statusMessage.textContent = statusMessage;
+    }
+
     const bulk = data.bulk || {};
     const running = Boolean(bulk.running);
     elements.bulkProcessBtn.disabled = running;
     elements.bulkPauseBtn.hidden = !running;
     elements.bulkCancelBtn.hidden = !running;
     elements.bulkPauseBtn.textContent = bulk.paused ? "Resume" : "Pause";
+    if (elements.bulkMeta) {
+        const total = bulk.total || 0;
+        const processed = bulk.processed || 0;
+        const stateLabel = running ? (bulk.paused ? "Paused" : "Running") : total ? "Ready" : "Idle";
+        elements.bulkMeta.textContent = total
+            ? `${stateLabel} • Listed ${processed}/${total}`
+            : "Paste bulk text to preview items.";
+    }
+    if (elements.bulkItems) {
+        renderBulkItems(bulk.items || []);
+    }
 }
 
 async function refreshOpenUrls() {
@@ -219,20 +264,26 @@ elements.bulkCancelBtn.addEventListener("click", async () => {
 });
 
 elements.promptOk.addEventListener("click", async () => {
-    if (activePromptId === null) {
-        return;
-    }
     const value = lastPromptType === "choice" ? elements.promptSelect.value : elements.promptInput.value;
-    await postJson(`/api/prompts/${activePromptId}`, { value });
-    hidePrompt();
+    await submitPrompt(value);
 });
 
 elements.promptCancel.addEventListener("click", async () => {
-    if (activePromptId === null) {
-        return;
+    await submitPrompt(null);
+});
+
+elements.promptInput.addEventListener("keydown", async (event) => {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        await submitPrompt(elements.promptInput.value);
     }
-    await postJson(`/api/prompts/${activePromptId}`, { value: null });
-    hidePrompt();
+});
+
+elements.promptSelect.addEventListener("keydown", async (event) => {
+    if (event.key === "Enter") {
+        event.preventDefault();
+        await submitPrompt(elements.promptSelect.value);
+    }
 });
 
 elements.toggleLogBtn.addEventListener("click", () => {
@@ -240,6 +291,90 @@ elements.toggleLogBtn.addEventListener("click", () => {
     elements.logView.hidden = !isHidden;
     elements.toggleLogBtn.textContent = isHidden ? "Hide Log" : "Show Log";
 });
+
+function renderBulkItems(items) {
+    if (!elements.bulkItems) {
+        return;
+    }
+    elements.bulkItems.innerHTML = "";
+    if (!items || items.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "bulk-empty";
+        empty.textContent = "No bulk items parsed yet.";
+        elements.bulkItems.appendChild(empty);
+        return;
+    }
+    items.forEach((item) => {
+        const card = document.createElement("div");
+        card.className = "bulk-item";
+
+        const header = document.createElement("div");
+        header.className = "bulk-item-header";
+
+        const title = document.createElement("span");
+        title.className = "bulk-item-title";
+        title.textContent = `Item ${item.index || ""}`.trim();
+
+        const status = document.createElement("span");
+        status.className = "status-pill bulk-status";
+        const statusLabel = item.status || "Ready";
+        status.dataset.tone = BULK_STATUS_TONES[statusLabel] || "idle";
+        status.textContent = statusLabel;
+
+        header.appendChild(title);
+        header.appendChild(status);
+
+        const body = document.createElement("div");
+        body.className = "bulk-item-body";
+
+        const url = document.createElement("div");
+        url.className = "bulk-item-url";
+        url.textContent = item.url || "Missing URL";
+
+        const meta = document.createElement("div");
+        meta.className = "bulk-item-meta";
+        const specifics = item.custom_specifics && Object.keys(item.custom_specifics).length
+            ? Object.entries(item.custom_specifics)
+                  .map(([key, value]) => `${key}: ${value}`)
+                  .join(" | ")
+            : "No custom specifics";
+        const note = item.note ? `Note: ${item.note}` : "No note";
+        meta.textContent = `Qty: ${item.quantity || 1} • ${note} • ${specifics}`;
+
+        body.appendChild(url);
+        body.appendChild(meta);
+
+        if (item.message) {
+            const message = document.createElement("div");
+            message.className = "bulk-item-message";
+            message.textContent = item.message;
+            body.appendChild(message);
+        }
+
+        card.appendChild(header);
+        card.appendChild(body);
+        elements.bulkItems.appendChild(card);
+    });
+}
+
+function scheduleBulkPreview() {
+    if (!elements.bulkText) {
+        return;
+    }
+    if (bulkPreviewTimeout) {
+        window.clearTimeout(bulkPreviewTimeout);
+    }
+    bulkPreviewTimeout = window.setTimeout(async () => {
+        const { response, data } = await postJson("/api/bulk/preview", { text: elements.bulkText.value });
+        if (response.ok) {
+            renderBulkItems(data.items || []);
+        }
+    }, 400);
+}
+
+elements.bulkText.addEventListener("input", scheduleBulkPreview);
+
+scheduleBulkPreview();
 
 setInterval(refreshLogs, 1500);
 setInterval(refreshPrompt, 1500);
