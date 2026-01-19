@@ -49,7 +49,6 @@ def _consume_oauth_code() -> Optional[str]:
         return None
     code = _OAUTH_CODE_VALUE
     _OAUTH_CODE_VALUE = None
-    _OAUTH_CODE_EVENT.clear()
     return code
 
 
@@ -69,13 +68,19 @@ def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
         with _OAUTH_CODE_LOCK:
             code = _consume_oauth_code()
             if code:
+                _OAUTH_CODE_EVENT.clear()
                 return code
-            _OAUTH_CODE_EVENT.clear()
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             io.log("Timed out waiting for OAuth callback code.")
             return None
         _OAUTH_CODE_EVENT.wait(remaining)
+        with _OAUTH_CODE_LOCK:
+            code = _consume_oauth_code()
+            if code:
+                _OAUTH_CODE_EVENT.clear()
+                return code
+            _OAUTH_CODE_EVENT.clear()
 
 
 def save_tokens(tokens, io: IOBridge):
