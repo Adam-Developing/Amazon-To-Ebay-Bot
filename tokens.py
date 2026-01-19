@@ -13,7 +13,8 @@ import requests
 from dotenv import load_dotenv
 from ui_bridge import IOBridge
 
-load_dotenv()
+_ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path=_ENV_PATH)
 CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 DEV_ID = os.getenv("EBAY_DEV_ID")
@@ -28,6 +29,16 @@ API_ENDPOINT = "https://api.ebay.com/identity/v1/oauth2/token"
 _OAUTH_CODE_LOCK = threading.Lock()
 _OAUTH_CODE_EVENT = threading.Event()
 _OAUTH_CODE_VALUE: Optional[str] = None
+
+
+def _reload_env() -> None:
+    global CLIENT_ID, CLIENT_SECRET, DEV_ID, RUNAME, REDIRECT_URI_HOST
+    load_dotenv(dotenv_path=_ENV_PATH, override=True)
+    CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
+    CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
+    DEV_ID = os.getenv("EBAY_DEV_ID")
+    RUNAME = os.getenv("EBAY_RUNAME")
+    REDIRECT_URI_HOST = os.getenv("EBAY_REDIRECT_URI_HOST")
 
 
 def set_oauth_callback_code(code: str) -> None:
@@ -101,6 +112,10 @@ def clear_user_token(io: IOBridge) -> bool:
 
 def get_application_token(existing_tokens, io: IOBridge):
     io.log("Checking application token…")
+    _reload_env()
+    if not CLIENT_ID or not CLIENT_SECRET:
+        io.log("Missing EBAY_CLIENT_ID or EBAY_CLIENT_SECRET. Update .env and restart the web server.")
+        return None
     app_token_data = existing_tokens.get('application_token', {})
 
     if app_token_data and time.time() < app_token_data.get('timestamp', 0) + app_token_data.get('expires_in', 0) - 300:
@@ -120,12 +135,15 @@ def get_application_token(existing_tokens, io: IOBridge):
         io.log("New application token received.")
         return new_token_data
     except requests.exceptions.RequestException as e:
+        if getattr(e, "response", None) is not None and e.response.status_code == 401:
+            io.log("Unauthorized application token. Verify EBAY_CLIENT_ID/EBAY_CLIENT_SECRET and keyset type.")
         io.log(f"Failed to get application token: {e.response.text if getattr(e, 'response', None) else str(e)}")
         return None
 
 
 def refresh_user_token(refresh_token_value, io: IOBridge):
     io.log("Refreshing user access token…")
+    _reload_env()
     try:
         credentials = f"{CLIENT_ID}:{CLIENT_SECRET}"
         encoded_credentials = base64.b64encode(credentials.encode()).decode()
@@ -158,6 +176,7 @@ def refresh_user_token(refresh_token_value, io: IOBridge):
 
 
 def get_user_token_full_flow(io: IOBridge):
+    _reload_env()
     auth_code = None
     server = None
     use_embedded_server = True
