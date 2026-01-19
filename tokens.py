@@ -7,8 +7,9 @@ import base64
 import threading
 import tempfile
 import hashlib
-import secrets
 import stat
+import getpass
+import logging
 from typing import Optional
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -34,11 +35,12 @@ _OAUTH_CODE_LOCK = threading.Lock()
 _OAUTH_CODE_EVENT = threading.Event()
 _OAUTH_CODE_VALUE: Optional[str] = None
 OAUTH_CODE_TIMEOUT_SECONDS = 600
-_OAUTH_FILE_FALLBACK_SALT = secrets.token_hex(16)
+_LOGGER = logging.getLogger(__name__)
+_OAUTH_FILE_FALLBACK_SALT = f"{getpass.getuser()}-amazon-to-ebay-oauth"
 
 
 def _oauth_code_file_path() -> str:
-    salt = os.getenv("FLASK_SECRET_KEY") or CLIENT_ID or RUNAME or _OAUTH_FILE_FALLBACK_SALT
+    salt = _OAUTH_FILE_FALLBACK_SALT
     token = hashlib.sha256(salt.encode()).hexdigest()
     return os.path.join(tempfile.gettempdir(), f"amazon_to_ebay_oauth_{token}.txt")
 
@@ -66,16 +68,17 @@ def _poll_oauth_code() -> Optional[str]:
         try:
             mode = stat.S_IMODE(os.stat(code_file).st_mode)
             if mode != 0o600:
-                code = ""
+                _LOGGER.warning("OAuth code file permissions are insecure; ignoring file.")
+                code = None
             else:
                 with open(code_file, "r", encoding="utf-8") as handle:
                     code = handle.read().strip()
         except OSError:
-            code = ""
+            code = None
         try:
             os.remove(code_file)
         except OSError:
-            pass
+            _LOGGER.warning("Failed to remove OAuth code file.")
         if code:
             _OAUTH_CODE_EVENT.clear()
             return code
