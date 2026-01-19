@@ -74,6 +74,7 @@ def _poll_oauth_code() -> Optional[str]:
                 with open(code_file, "r", encoding="utf-8") as handle:
                     code = handle.read().strip()
         except OSError:
+            _LOGGER.warning("Failed to read OAuth code file.")
             code = None
         try:
             os.remove(code_file)
@@ -98,7 +99,7 @@ def set_oauth_callback_code(code: str) -> None:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(code)
         except OSError:
-            pass
+            _LOGGER.warning("Failed to write OAuth code file.")
 
 
 def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
