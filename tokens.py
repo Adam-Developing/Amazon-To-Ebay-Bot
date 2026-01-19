@@ -51,7 +51,15 @@ def set_oauth_callback_code(code: str) -> None:
 
 def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
     """Block until an external callback provides the OAuth code."""
+    global _OAUTH_CODE_VALUE
     io.log("Waiting for authorization code via web callback…")
+    with _OAUTH_CODE_LOCK:
+        if _OAUTH_CODE_VALUE:
+            code = _OAUTH_CODE_VALUE
+            _OAUTH_CODE_VALUE = None
+            _OAUTH_CODE_EVENT.clear()
+            return code
+        _OAUTH_CODE_EVENT.clear()
     _OAUTH_CODE_EVENT.wait()
     with _OAUTH_CODE_LOCK:
         code = _OAUTH_CODE_VALUE
