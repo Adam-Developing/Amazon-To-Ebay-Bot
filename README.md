@@ -306,8 +306,8 @@ To disconnect your eBay account:
 - Try changing the port in both `.env` and your RuName configuration
 
 #### Embedded browser panel not loading a site
-- **Solution**: Use the **Edge mode** toggle to open the URL in a new browser tab
-- Some sites may block iframe embedding and require external browsing
+- **Solution**: Use the **Open in new tab** button or **Edge mode** toggle for restricted sites
+- Google and eBay pages often block iframe embedding via X-Frame-Options/CSP, so external browsing is required
 
 #### Import errors (missing modules)
 - **Solution**: Reinstall dependencies: `pip install -r requirements.txt`

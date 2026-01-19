@@ -74,6 +74,30 @@ function normalizeUrl(text) {
     return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
 }
 
+function isBlockedHost(hostname) {
+    if (!hostname) {
+        return false;
+    }
+    const host = hostname.toLowerCase();
+    if (host === "google.com" || host.endsWith(".google.com")) {
+        return true;
+    }
+    if (host.endsWith(".ebay.com") || host.endsWith(".ebay.co.uk")) {
+        return true;
+    }
+    return false;
+}
+
+function shouldEmbedUrl(url) {
+    try {
+        const host = new URL(url).hostname;
+        return !isBlockedHost(host);
+    } catch (error) {
+        console.warn("Unable to evaluate host for embedding", error);
+        return true;
+    }
+}
+
 function deriveTitle(url) {
     try {
         const parsed = new URL(url);
@@ -104,10 +128,33 @@ function createTab(url, activate = true) {
     const iframe = document.createElement("iframe");
     iframe.className = "browser-frame";
     iframe.dataset.tabId = String(id);
-    iframe.src = url;
     elements.tabContents.appendChild(iframe);
 
-    const tab = { id, button: tabButton, titleSpan, iframe, url };
+    const message = document.createElement("div");
+    message.className = "frame-message";
+    message.hidden = true;
+
+    const messageText = document.createElement("p");
+    message.appendChild(messageText);
+
+    const messageButton = document.createElement("button");
+    messageButton.type = "button";
+    messageButton.textContent = "Open in new tab";
+    message.appendChild(messageButton);
+
+    elements.tabContents.appendChild(message);
+
+    const tab = {
+        id,
+        button: tabButton,
+        titleSpan,
+        iframe,
+        url,
+        message,
+        messageText,
+        messageButton,
+        blockedUrl: null,
+    };
     tabs.push(tab);
 
     tabButton.addEventListener("click", (event) => {
@@ -123,13 +170,23 @@ function createTab(url, activate = true) {
         closeTab(id);
     });
 
-    iframe.addEventListener("load", () => {
-        tab.url = iframe.src;
-        tab.titleSpan.textContent = deriveTitle(tab.url).slice(0, 24);
-        if (activeTabId === id) {
-            elements.addressBar.value = tab.url;
+    messageButton.addEventListener("click", () => {
+        if (tab.blockedUrl) {
+            openExternal(tab.blockedUrl);
         }
     });
+
+    iframe.addEventListener("load", () => {
+        if (!tab.blockedUrl) {
+            tab.url = iframe.src;
+            tab.titleSpan.textContent = deriveTitle(tab.url).slice(0, 24);
+            if (activeTabId === id) {
+                elements.addressBar.value = tab.url;
+            }
+        }
+    });
+
+    navigateTab(tab, url);
 
     if (activate) {
         setActiveTab(id);
@@ -141,7 +198,9 @@ function setActiveTab(id) {
     tabs.forEach((tab) => {
         const isActive = tab.id === id;
         tab.button.classList.toggle("active", isActive);
-        tab.iframe.style.display = isActive ? "block" : "none";
+        const showFrame = isActive && !tab.blockedUrl;
+        tab.iframe.style.display = showFrame ? "block" : "none";
+        tab.message.hidden = !isActive || !tab.blockedUrl;
         if (isActive) {
             elements.addressBar.value = tab.url || "";
         }
@@ -159,6 +218,7 @@ function closeTab(id) {
     const tab = tabs[index];
     tab.button.remove();
     tab.iframe.remove();
+    tab.message.remove();
     tabs.splice(index, 1);
     if (activeTabId === id) {
         const fallback = tabs[Math.min(index, tabs.length - 1)];
@@ -172,15 +232,44 @@ function getActiveTab() {
     return tabs.find((tab) => tab.id === activeTabId) || null;
 }
 
+function navigateTab(tab, url) {
+    tab.url = url;
+    tab.blockedUrl = null;
+    tab.message.hidden = true;
+    tab.iframe.style.display = "block";
+    if (!shouldEmbedUrl(url)) {
+        showBlockedTab(tab, url);
+        return;
+    }
+    tab.iframe.src = url;
+    tab.titleSpan.textContent = deriveTitle(url).slice(0, 24);
+    elements.addressBar.value = url;
+}
+
+function showBlockedTab(tab, url) {
+    tab.blockedUrl = url;
+    tab.iframe.src = "about:blank";
+    tab.iframe.style.display = "none";
+    const host = (() => {
+        try {
+            return new URL(url).hostname;
+        } catch (error) {
+            return url;
+        }
+    })();
+    tab.messageText.textContent = `This site (${host}) blocks being embedded. Use “Open in new tab” to continue securely.`;
+    tab.message.hidden = false;
+    tab.titleSpan.textContent = `${host} (external)`.slice(0, 24);
+    elements.addressBar.value = url;
+    postJson("/api/log", { message: `Embedded view blocked for ${host}. Use Open in new tab.` });
+}
+
 function navigateCurrent(url) {
     const target = getActiveTab();
     if (!target) {
         return;
     }
-    target.url = url;
-    target.iframe.src = url;
-    target.titleSpan.textContent = deriveTitle(url).slice(0, 24);
-    elements.addressBar.value = url;
+    navigateTab(target, url);
 }
 
 function openExternal(url) {

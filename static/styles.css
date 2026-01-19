@@ -218,6 +218,29 @@ button.secondary {
     background: #ffffff;
 }
 
+.frame-message {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 24px;
+    text-align: center;
+    background: #ffffff;
+    color: #1f1f1f;
+}
+
+.frame-message p {
+    margin: 0;
+    max-width: 420px;
+}
+
+.frame-message[hidden] {
+    display: none;
+}
+
 .browser-frame {
     position: absolute;
     inset: 0;
