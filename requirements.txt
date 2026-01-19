@@ -1,5 +1,4 @@
 requests
 beautifulsoup4
 python-dotenv
-PyQt6
-PyQt6-WebEngine
+Flask==3.1.2

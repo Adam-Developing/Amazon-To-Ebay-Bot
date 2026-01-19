@@ -5,6 +5,12 @@ import json
 import time
 import base64
 import threading
+import tempfile
+import hashlib
+import stat
+import getpass
+import logging
+from typing import Optional
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -12,7 +18,8 @@ import requests
 from dotenv import load_dotenv
 from ui_bridge import IOBridge
 
-load_dotenv()
+_ENV_PATH = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(dotenv_path=_ENV_PATH)
 CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 DEV_ID = os.getenv("EBAY_DEV_ID")
@@ -23,6 +30,106 @@ user_SCOPES = "https://api.ebay.com/oauth/api_scope/sell.inventory https://api.e
 application_SCOPES = "https://api.ebay.com/oauth/api_scope"
 TOKENS_FILE = "ebay_tokens.json"
 API_ENDPOINT = "https://api.ebay.com/identity/v1/oauth2/token"
+
+_OAUTH_CODE_LOCK = threading.Lock()
+_OAUTH_CODE_EVENT = threading.Event()
+_OAUTH_CODE_VALUE: Optional[str] = None
+OAUTH_CODE_TIMEOUT_SECONDS = 600
+_LOGGER = logging.getLogger(__name__)
+_OAUTH_FILE_LABEL = "amazon-to-ebay-oauth"
+_OAUTH_FILE_FALLBACK_SALT = f"{getpass.getuser()}-{_OAUTH_FILE_LABEL}"
+
+
+def _oauth_code_file_path() -> str:
+    salt = _OAUTH_FILE_FALLBACK_SALT
+    token = hashlib.sha256(salt.encode()).hexdigest()
+    return os.path.join(tempfile.gettempdir(), f"amazon_to_ebay_oauth_{token}.txt")
+
+
+def _reload_env() -> None:
+    global CLIENT_ID, CLIENT_SECRET, DEV_ID, RUNAME, REDIRECT_URI_HOST
+    load_dotenv(dotenv_path=_ENV_PATH, override=True)
+    CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
+    CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
+    DEV_ID = os.getenv("EBAY_DEV_ID")
+    RUNAME = os.getenv("EBAY_RUNAME")
+    REDIRECT_URI_HOST = os.getenv("EBAY_REDIRECT_URI_HOST")
+
+
+def _poll_oauth_code() -> Optional[str]:
+    """Return any cached OAuth code and clear stale events. Caller must hold _OAUTH_CODE_LOCK."""
+    global _OAUTH_CODE_VALUE
+    if _OAUTH_CODE_VALUE:
+        code = _OAUTH_CODE_VALUE
+        _OAUTH_CODE_VALUE = None
+        _OAUTH_CODE_EVENT.clear()
+        return code
+    code_file = _oauth_code_file_path()
+    if os.path.exists(code_file):
+        try:
+            mode = stat.S_IMODE(os.stat(code_file).st_mode)
+            # Reject any group/other permissions and owner execute bit for safety.
+            if mode & 0o177:
+                _LOGGER.warning("OAuth code file permissions are insecure; ignoring file.")
+                code = None
+            else:
+                with open(code_file, "r", encoding="utf-8") as handle:
+                    code = handle.read().strip()
+        except OSError:
+            _LOGGER.warning("Failed to read OAuth code file.")
+            code = None
+        try:
+            os.remove(code_file)
+        except OSError:
+            _LOGGER.warning("Failed to remove OAuth code file.")
+        if code:
+            _OAUTH_CODE_EVENT.clear()
+            return code
+    if _OAUTH_CODE_EVENT.is_set():
+        _OAUTH_CODE_EVENT.clear()
+    return None
+
+
+def set_oauth_callback_code(code: str) -> None:
+    """Allow external web servers to pass the OAuth code back to this module."""
+    global _OAUTH_CODE_VALUE
+    with _OAUTH_CODE_LOCK:
+        _OAUTH_CODE_VALUE = code
+        _OAUTH_CODE_EVENT.set()
+        try:
+            code_file = _oauth_code_file_path()
+            for _ in range(2):
+                try:
+                    os.remove(code_file)
+                except FileNotFoundError:
+                    pass
+                try:
+                    fd = os.open(code_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    continue
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(code)
+                break
+            else:
+                _LOGGER.warning("OAuth code file already exists; unable to write.")
+        except OSError:
+            _LOGGER.warning("Failed to write OAuth code file.")
+
+
+def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
+    """Block until an external callback provides the OAuth code."""
+    io.log("Waiting for authorization code via web callback…")
+    deadline = time.monotonic() + OAUTH_CODE_TIMEOUT_SECONDS
+    while True:
+        with _OAUTH_CODE_LOCK:
+            code = _poll_oauth_code()
+            if code:
+                return code
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            io.log("Timed out waiting for OAuth callback code.")
+            return None
+        _OAUTH_CODE_EVENT.wait(remaining)
 
 
 def save_tokens(tokens, io: IOBridge):
@@ -77,6 +184,10 @@ def clear_user_token(io: IOBridge) -> bool:
 
 def get_application_token(existing_tokens, io: IOBridge):
     io.log("Checking application token…")
+    _reload_env()
+    if not CLIENT_ID or not CLIENT_SECRET:
+        io.log("Missing EBAY_CLIENT_ID or EBAY_CLIENT_SECRET. Update .env and restart the web server.")
+        return None
     app_token_data = existing_tokens.get('application_token', {})
 
     if app_token_data and time.time() < app_token_data.get('timestamp', 0) + app_token_data.get('expires_in', 0) - 300:
@@ -96,12 +207,15 @@ def get_application_token(existing_tokens, io: IOBridge):
         io.log("New application token received.")
         return new_token_data
     except requests.exceptions.RequestException as e:
+        if getattr(e, "response", None) is not None and e.response.status_code == 401:
+            io.log("Unauthorized application token. Verify EBAY_CLIENT_ID/EBAY_CLIENT_SECRET and keyset type.")
         io.log(f"Failed to get application token: {e.response.text if getattr(e, 'response', None) else str(e)}")
         return None
 
 
 def refresh_user_token(refresh_token_value, io: IOBridge):
     io.log("Refreshing user access token…")
+    _reload_env()
     try:
         credentials = f"{CLIENT_ID}:{CLIENT_SECRET}"
         encoded_credentials = base64.b64encode(credentials.encode()).decode()
@@ -134,7 +248,10 @@ def refresh_user_token(refresh_token_value, io: IOBridge):
 
 
 def get_user_token_full_flow(io: IOBridge):
+    _reload_env()
     auth_code = None
+    server = None
+    use_embedded_server = True
 
     class OAuthCallbackHandler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -152,19 +269,33 @@ def get_user_token_full_flow(io: IOBridge):
                 self.wfile.write(b"Authentication failed.")
 
     port = int(urlparse(REDIRECT_URI_HOST).port)
-    server = HTTPServer(('', port), OAuthCallbackHandler)
-    thread = threading.Thread(target=server.serve_forever)
-    thread.daemon = True
-    thread.start()
+    try:
+        server = HTTPServer(('', port), OAuthCallbackHandler)
+    except OSError as exc:
+        use_embedded_server = False
+        io.log(
+            f"OAuth callback port {port} is busy ({exc}). Ensure the web UI is running on "
+            f"{REDIRECT_URI_HOST} so the /callback route can receive the consent response."
+        )
+    if use_embedded_server and server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.daemon = True
+        thread.start()
 
     consent_url = f"https://auth.ebay.com/oauth2/authorize?client_id={CLIENT_ID}&response_type=code&redirect_uri={RUNAME}&scope={user_SCOPES}"
     io.log("Opening browser for eBay consent…")
     io.open_url(consent_url)
 
     io.log("Waiting for authorization code…")
-    while not auth_code:
-        time.sleep(0.5)
-    server.shutdown()
+    if use_embedded_server and server:
+        while not auth_code:
+            time.sleep(0.5)
+        server.shutdown()
+    else:
+        auth_code = _wait_for_external_oauth_code(io)
+        if not auth_code:
+            io.log("No authorization code received.")
+            return None
     io.log("Authorization code received.")
 
     io.log("Exchanging authorization code for access token…")

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amazon to eBay Web UI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+<div class="app-shell">
+    <section class="left-pane">
+        <div class="panel-tabs">
+            <button class="panel-tab active" data-target="single-panel">Single</button>
+            <button class="panel-tab" data-target="bulk-panel">Bulk</button>
+        </div>
+
+        <div id="single-panel" class="panel-body active">
+            <div class="form-row">
+                <label for="amazonUrl">Amazon URL:</label>
+                <input id="amazonUrl" type="text" placeholder="https://www.amazon.co.uk/...">
+                <button id="loadJsonBtn" type="button">Load from JSON…</button>
+                <input id="jsonFile" type="file" accept="application/json" hidden>
+            </div>
+            <div class="form-row">
+                <label for="quantity">Quantity:</label>
+                <input id="quantity" type="number" min="1" placeholder="1">
+                <label for="sellerNote">Private Note:</label>
+                <input id="sellerNote" type="text">
+            </div>
+            <div class="form-row">
+                <input id="customSpecs" type="text" placeholder="Custom specifics e.g. Size: XL | Colour: Black">
+            </div>
+            <div class="button-row">
+                <button id="authBtn" type="button">Authorize eBay / Refresh Tokens</button>
+                <button id="logoutBtn" type="button">Logout eBay</button>
+                <button id="scrapeBtn" type="button">Scrape Amazon</button>
+                <button id="listBtn" type="button" disabled>List on eBay</button>
+            </div>
+        </div>
+
+        <div id="bulk-panel" class="panel-body">
+            <textarea id="bulkText" rows="10" placeholder="Paste bulk text here. Example:
+https://www.amazon.co.uk/…
+Quantity: 2
+Note: Gift
+Size: L | Colour: Red
+
+…"></textarea>
+            <div class="button-row">
+                <button id="bulkProcessBtn" type="button">Process Bulk</button>
+                <button id="bulkPauseBtn" type="button" class="secondary" hidden>Pause</button>
+                <button id="bulkCancelBtn" type="button" class="secondary" hidden>Cancel</button>
+            </div>
+        </div>
+
+        <div id="promptPanel" class="prompt-panel" hidden>
+            <span id="promptLabel"></span>
+            <input id="promptInput" type="text">
+            <select id="promptSelect"></select>
+            <div class="button-row">
+                <button id="promptOk" type="button">OK</button>
+                <button id="promptCancel" type="button" class="secondary">Cancel</button>
+            </div>
+        </div>
+
+        <button id="toggleLogBtn" type="button" class="log-toggle">Show Log</button>
+        <div id="logView" class="log-view" hidden></div>
+        <div class="browser-retired">
+            <strong>Browsing:</strong> Links open directly in a new tab to avoid iframe blocking.
+        </div>
+    </section>
+</div>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from gui import run_gui
+from web_app import run_web
 
 if __name__ == "__main__":
-    run_gui()
+    run_web()
