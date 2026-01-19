@@ -8,6 +8,7 @@ import threading
 import tempfile
 import hashlib
 import secrets
+import stat
 from typing import Optional
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -37,8 +38,8 @@ _OAUTH_FILE_FALLBACK_SALT = secrets.token_hex(16)
 
 
 def _oauth_code_file_path() -> str:
-    salt = CLIENT_SECRET or CLIENT_ID or RUNAME or _OAUTH_FILE_FALLBACK_SALT
-    token = hashlib.sha256(salt.encode()).hexdigest()[:32]
+    salt = os.getenv("FLASK_SECRET_KEY") or CLIENT_ID or RUNAME or _OAUTH_FILE_FALLBACK_SALT
+    token = hashlib.sha256(salt.encode()).hexdigest()
     return os.path.join(tempfile.gettempdir(), f"amazon_to_ebay_oauth_{token}.txt")
 
 
@@ -63,8 +64,12 @@ def _poll_oauth_code() -> Optional[str]:
     code_file = _oauth_code_file_path()
     if os.path.exists(code_file):
         try:
-            with open(code_file, "r", encoding="utf-8") as handle:
-                code = handle.read().strip()
+            mode = stat.S_IMODE(os.stat(code_file).st_mode)
+            if mode != 0o600:
+                code = ""
+            else:
+                with open(code_file, "r", encoding="utf-8") as handle:
+                    code = handle.read().strip()
         except OSError:
             code = ""
         try:
