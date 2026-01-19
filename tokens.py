@@ -42,6 +42,17 @@ def _reload_env() -> None:
     REDIRECT_URI_HOST = os.getenv("EBAY_REDIRECT_URI_HOST")
 
 
+def _consume_oauth_code() -> Optional[str]:
+    """Consume the cached OAuth code. Caller must hold _OAUTH_CODE_LOCK."""
+    global _OAUTH_CODE_VALUE
+    if not _OAUTH_CODE_VALUE:
+        return None
+    code = _OAUTH_CODE_VALUE
+    _OAUTH_CODE_VALUE = None
+    _OAUTH_CODE_EVENT.clear()
+    return code
+
+
 def set_oauth_callback_code(code: str) -> None:
     """Allow external web servers to pass the OAuth code back to this module."""
     global _OAUTH_CODE_VALUE
@@ -57,10 +68,8 @@ def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
     deadline = time.monotonic() + OAUTH_CODE_TIMEOUT_SECONDS
     while True:
         with _OAUTH_CODE_LOCK:
-            if _OAUTH_CODE_VALUE:
-                code = _OAUTH_CODE_VALUE
-                _OAUTH_CODE_VALUE = None
-                _OAUTH_CODE_EVENT.clear()
+            code = _consume_oauth_code()
+            if code:
                 return code
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -68,10 +77,8 @@ def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
             return None
         _OAUTH_CODE_EVENT.wait(remaining)
         with _OAUTH_CODE_LOCK:
-            if _OAUTH_CODE_VALUE:
-                code = _OAUTH_CODE_VALUE
-                _OAUTH_CODE_VALUE = None
-                _OAUTH_CODE_EVENT.clear()
+            code = _consume_oauth_code()
+            if code:
                 return code
             _OAUTH_CODE_EVENT.clear()
 
