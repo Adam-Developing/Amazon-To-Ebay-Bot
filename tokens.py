@@ -36,7 +36,8 @@ _OAUTH_CODE_EVENT = threading.Event()
 _OAUTH_CODE_VALUE: Optional[str] = None
 OAUTH_CODE_TIMEOUT_SECONDS = 600
 _LOGGER = logging.getLogger(__name__)
-_OAUTH_FILE_FALLBACK_SALT = f"{getpass.getuser()}-amazon-to-ebay-oauth"
+_OAUTH_FILE_LABEL = "amazon-to-ebay-oauth"
+_OAUTH_FILE_FALLBACK_SALT = f"{getpass.getuser()}-{_OAUTH_FILE_LABEL}"
 
 
 def _oauth_code_file_path() -> str:
@@ -67,7 +68,7 @@ def _poll_oauth_code() -> Optional[str]:
     if os.path.exists(code_file):
         try:
             mode = stat.S_IMODE(os.stat(code_file).st_mode)
-            if mode != 0o600:
+            if mode & 0o077:
                 _LOGGER.warning("OAuth code file permissions are insecure; ignoring file.")
                 code = None
             else:
@@ -95,7 +96,12 @@ def set_oauth_callback_code(code: str) -> None:
         _OAUTH_CODE_VALUE = code
         _OAUTH_CODE_EVENT.set()
         try:
-            fd = os.open(_oauth_code_file_path(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            code_file = _oauth_code_file_path()
+            try:
+                os.remove(code_file)
+            except FileNotFoundError:
+                pass
+            fd = os.open(code_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(code)
         except OSError:
