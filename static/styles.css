@@ -15,23 +15,16 @@ body {
 }
 
 .left-pane {
-    width: 38%;
+    width: 100%;
     min-width: 360px;
-    max-width: 520px;
+    max-width: none;
     background: #ffffff;
-    border-right: 1px solid #dcdfe4;
+    border-right: none;
     padding: 16px;
     display: flex;
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
-}
-
-.right-pane {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
 }
 
 .panel-tabs {
@@ -143,6 +136,15 @@ button.secondary {
     overflow-y: auto;
     font-family: "Consolas", "Courier New", monospace;
     white-space: pre-wrap;
+}
+
+.browser-retired {
+    border: 1px solid #dcdfe4;
+    border-radius: 6px;
+    padding: 10px;
+    background: #f9fafb;
+    color: #374151;
+    font-size: 0.95rem;
 }
 
 .nav-bar {

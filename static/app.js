@@ -1,5 +1,3 @@
-const defaultUrl = document.body.dataset.defaultUrl || "https://www.google.com";
-
 const elements = {
     amazonUrl: document.getElementById("amazonUrl"),
     quantity: document.getElementById("quantity"),
@@ -23,25 +21,9 @@ const elements = {
     promptCancel: document.getElementById("promptCancel"),
     toggleLogBtn: document.getElementById("toggleLogBtn"),
     logView: document.getElementById("logView"),
-    navBack: document.getElementById("navBack"),
-    navForward: document.getElementById("navForward"),
-    navRefresh: document.getElementById("navRefresh"),
-    addressBar: document.getElementById("addressBar"),
-    goBtn: document.getElementById("goBtn"),
-    openEdgeBtn: document.getElementById("openEdgeBtn"),
-    edgeMode: document.getElementById("edgeMode"),
-    tabBar: document.getElementById("tabBar"),
-    tabContents: document.getElementById("tabContents"),
-    addTabBtn: document.getElementById("addTabBtn"),
     panelTabs: document.querySelectorAll(".panel-tab"),
     panelBodies: document.querySelectorAll(".panel-body"),
 };
-
-const BLOCKED_DOMAINS = ["google.com", "ebay.com", "ebay.co.uk"];
-
-let tabs = [];
-let activeTabId = null;
-let tabCounter = 0;
 let lastLogId = 0;
 let activePromptId = null;
 let lastPromptType = null;
@@ -62,234 +44,11 @@ async function postJson(url, payload) {
     return { response, data };
 }
 
-function normalizeUrl(text) {
-    const trimmed = text.trim();
-    if (!trimmed) {
-        return "";
-    }
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
-        return trimmed;
-    }
-    if (/^[^\s/:]+\.[^\s/:]+.*$/.test(trimmed)) {
-        return `https://${trimmed}`;
-    }
-    return `https://www.google.com/search?q=${encodeURIComponent(trimmed)}`;
-}
-
-function isBlockedHost(hostname) {
-    if (!hostname) {
-        return false;
-    }
-    const host = hostname.toLowerCase();
-    return BLOCKED_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`));
-}
-
-function shouldEmbedUrl(url) {
-    try {
-        return !isBlockedHost(getHostFromUrl(url));
-    } catch (error) {
-        console.warn("Unable to evaluate host for embedding", error);
-        return true;
-    }
-}
-
-function getHostFromUrl(url) {
-    try {
-        return new URL(url).hostname;
-    } catch (error) {
-        return "";
-    }
-}
-
-function deriveTitle(url) {
-    try {
-        const parsed = new URL(url);
-        return parsed.hostname || url;
-    } catch (error) {
-        console.warn("Unable to derive title from URL", error);
-        return url || "Tab";
-    }
-}
-
-function createTab(url, activate = true) {
-    const id = ++tabCounter;
-    const tabButton = document.createElement("button");
-    tabButton.className = "tab";
-    tabButton.dataset.tabId = String(id);
-
-    const titleSpan = document.createElement("span");
-    titleSpan.textContent = deriveTitle(url);
-
-    const closeSpan = document.createElement("span");
-    closeSpan.className = "close";
-    closeSpan.textContent = "×";
-
-    tabButton.appendChild(titleSpan);
-    tabButton.appendChild(closeSpan);
-    elements.tabBar.insertBefore(tabButton, elements.addTabBtn);
-
-    const iframe = document.createElement("iframe");
-    iframe.className = "browser-frame";
-    iframe.dataset.tabId = String(id);
-    elements.tabContents.appendChild(iframe);
-
-    const message = document.createElement("div");
-    message.className = "frame-message";
-    message.hidden = true;
-
-    const messageText = document.createElement("p");
-    message.appendChild(messageText);
-
-    const messageButton = document.createElement("button");
-    messageButton.type = "button";
-    messageButton.textContent = "Open in new tab";
-    message.appendChild(messageButton);
-
-    elements.tabContents.appendChild(message);
-
-    const tab = {
-        id,
-        button: tabButton,
-        titleSpan,
-        iframe,
-        url,
-        message,
-        messageText,
-        messageButton,
-        blockedUrl: null,
-    };
-    tabs.push(tab);
-
-    tabButton.addEventListener("click", (event) => {
-        if (event.target === closeSpan) {
-            closeTab(id);
-            return;
-        }
-        setActiveTab(id);
-    });
-
-    closeSpan.addEventListener("click", (event) => {
-        event.stopPropagation();
-        closeTab(id);
-    });
-
-    messageButton.addEventListener("click", () => {
-        if (tab.blockedUrl) {
-            openExternal(tab.blockedUrl);
-        }
-    });
-
-    iframe.addEventListener("load", () => {
-        if (!tab.blockedUrl) {
-            tab.url = iframe.src;
-            tab.titleSpan.textContent = deriveTitle(tab.url).slice(0, 24);
-            if (activeTabId === id) {
-                elements.addressBar.value = tab.url;
-            }
-        }
-    });
-
-    navigateTab(tab, url);
-
-    if (activate) {
-        setActiveTab(id);
-    }
-}
-
-function setActiveTab(id) {
-    activeTabId = id;
-    tabs.forEach((tab) => {
-        const isActive = tab.id === id;
-        tab.button.classList.toggle("active", isActive);
-        const showFrame = isActive && !tab.blockedUrl;
-        tab.iframe.style.display = showFrame ? "block" : "none";
-        tab.message.hidden = !isActive || !tab.blockedUrl;
-        if (isActive) {
-            elements.addressBar.value = tab.url || "";
-        }
-    });
-}
-
-function closeTab(id) {
-    if (tabs.length <= 1) {
-        return;
-    }
-    const index = tabs.findIndex((tab) => tab.id === id);
-    if (index === -1) {
-        return;
-    }
-    const tab = tabs[index];
-    tab.button.remove();
-    tab.iframe.remove();
-    tab.message.remove();
-    tabs.splice(index, 1);
-    if (activeTabId === id) {
-        const fallback = tabs[Math.min(index, tabs.length - 1)];
-        if (fallback) {
-            setActiveTab(fallback.id);
-        }
-    }
-}
-
-function getActiveTab() {
-    return tabs.find((tab) => tab.id === activeTabId) || null;
-}
-
-function navigateTab(tab, url) {
-    tab.url = url;
-    tab.blockedUrl = null;
-    tab.message.hidden = true;
-    tab.iframe.style.display = "block";
-    if (!shouldEmbedUrl(url)) {
-        showBlockedTab(tab, url);
-        return;
-    }
-    tab.iframe.src = url;
-    tab.titleSpan.textContent = deriveTitle(url).slice(0, 24);
-}
-
-function showBlockedTab(tab, url) {
-    tab.blockedUrl = url;
-    tab.iframe.src = "about:blank";
-    tab.iframe.style.display = "none";
-    const host = getHostFromUrl(url);
-    const hostLabel = host || "this site";
-    tab.messageText.textContent = `This site (${hostLabel}) cannot be embedded for security reasons. Use “Open in new tab” to continue.`;
-    tab.message.hidden = false;
-    tab.titleSpan.textContent = `${hostLabel} (external)`.slice(0, 24);
-    elements.addressBar.value = url;
-    const logLabel = host || "unknown site";
-    postJson("/api/log", { message: `Blocked embedded view for ${logLabel}.` }).catch((error) => {
-        console.warn("Failed to log blocked host", error);
-    });
-}
-
-function navigateCurrent(url) {
-    const target = getActiveTab();
-    if (!target) {
-        return;
-    }
-    navigateTab(target, url);
-}
-
 function openExternal(url) {
     if (!url) {
         return;
     }
     window.open(url, "_blank", "noopener");
-}
-
-function handleNavigation() {
-    const url = normalizeUrl(elements.addressBar.value);
-    if (!url) {
-        return;
-    }
-    if (elements.edgeMode.checked) {
-        elements.addressBar.value = url;
-        openExternal(url);
-        return;
-    }
-    navigateCurrent(url);
 }
 
 function toggleTabPanel(targetId) {
@@ -374,11 +133,7 @@ async function refreshOpenUrls() {
     const data = await response.json();
     const urls = data.urls || [];
     urls.forEach((url) => {
-        if (elements.edgeMode.checked) {
-            openExternal(url);
-        } else {
-            createTab(url, true);
-        }
+        openExternal(url);
     });
 }
 
@@ -485,91 +240,6 @@ elements.toggleLogBtn.addEventListener("click", () => {
     elements.logView.hidden = !isHidden;
     elements.toggleLogBtn.textContent = isHidden ? "Hide Log" : "Show Log";
 });
-
-elements.navBack.addEventListener("click", () => {
-    const active = getActiveTab();
-    if (active && active.iframe.contentWindow) {
-        active.iframe.contentWindow.history.back();
-    }
-});
-
-elements.navForward.addEventListener("click", () => {
-    const active = getActiveTab();
-    if (active && active.iframe.contentWindow) {
-        active.iframe.contentWindow.history.forward();
-    }
-});
-
-elements.navRefresh.addEventListener("click", () => {
-    const active = getActiveTab();
-    if (active && active.iframe.contentWindow) {
-        active.iframe.contentWindow.location.reload();
-    }
-});
-
-elements.addressBar.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-        handleNavigation();
-    }
-});
-
-elements.goBtn.addEventListener("click", handleNavigation);
-
-elements.openEdgeBtn.addEventListener("click", () => {
-    const url = normalizeUrl(elements.addressBar.value || (getActiveTab() || {}).url || "");
-    openExternal(url);
-});
-
-elements.edgeMode.addEventListener("change", () => {
-    const state = elements.edgeMode.checked ? "ON" : "OFF";
-    postJson("/api/log", { message: `Edge mode: ${state}` });
-});
-
-elements.addTabBtn.addEventListener("click", () => createTab(defaultUrl, true));
-
-document.addEventListener("keydown", (event) => {
-    if (event.ctrlKey && event.key.toLowerCase() === "t") {
-        event.preventDefault();
-        createTab(defaultUrl, true);
-    }
-    if (event.ctrlKey && event.key.toLowerCase() === "w") {
-        event.preventDefault();
-        const active = getActiveTab();
-        if (active) {
-            closeTab(active.id);
-        }
-    }
-    if (event.ctrlKey && event.shiftKey && event.key === "Tab") {
-        event.preventDefault();
-        if (tabs.length > 1) {
-            const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
-            const nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-            setActiveTab(tabs[nextIndex].id);
-        }
-    }
-    if (event.ctrlKey && event.key === "Tab" && !event.shiftKey) {
-        event.preventDefault();
-        if (tabs.length > 1) {
-            const currentIndex = tabs.findIndex((tab) => tab.id === activeTabId);
-            const nextIndex = (currentIndex + 1) % tabs.length;
-            setActiveTab(tabs[nextIndex].id);
-        }
-    }
-    if (event.key === "F5" || (event.ctrlKey && event.key.toLowerCase() === "r")) {
-        event.preventDefault();
-        elements.navRefresh.click();
-    }
-    if (event.altKey && event.key === "ArrowLeft") {
-        event.preventDefault();
-        elements.navBack.click();
-    }
-    if (event.altKey && event.key === "ArrowRight") {
-        event.preventDefault();
-        elements.navForward.click();
-    }
-});
-
-createTab(defaultUrl, true);
 
 setInterval(refreshLogs, 1500);
 setInterval(refreshPrompt, 1500);

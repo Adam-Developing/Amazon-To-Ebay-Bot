@@ -6,7 +6,7 @@
     <title>Amazon to eBay Web UI</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
-<body data-default-url="{{ default_new_tab_url }}">
+<body>
 <div class="app-shell">
     <section class="left-pane">
         <div class="panel-tabs">
@@ -65,23 +65,8 @@ Size: L | Colour: Red
 
         <button id="toggleLogBtn" type="button" class="log-toggle">Show Log</button>
         <div id="logView" class="log-view" hidden></div>
-    </section>
-
-    <section class="right-pane">
-        <div class="nav-bar">
-            <button id="navBack" type="button">◀</button>
-            <button id="navForward" type="button">▶</button>
-            <button id="navRefresh" type="button">⟳</button>
-            <input id="addressBar" type="text" placeholder="Enter URL and press Enter…">
-            <button id="goBtn" type="button">Go</button>
-            <button id="openEdgeBtn" type="button">Edge</button>
-            <label class="edge-toggle"><input id="edgeMode" type="checkbox"> Edge mode</label>
-        </div>
-        <div class="browser-tabs">
-            <div id="tabBar" class="tab-bar">
-                <button id="addTabBtn" type="button" class="tab add-tab">+</button>
-            </div>
-            <div id="tabContents" class="tab-contents"></div>
+        <div class="browser-retired">
+            <strong>Browsing:</strong> Links open directly in a new tab to avoid iframe blocking.
         </div>
     </section>
 </div>

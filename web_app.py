@@ -23,7 +23,6 @@ from ui_bridge import IOBridge
 
 app = Flask(__name__)
 
-DEFAULT_NEW_TAB_URL = os.getenv("DEFAULT_NEW_TAB_URL", "https://www.google.com")
 MAX_LOG_ENTRIES = 1000
 PROMPT_TIMEOUT_SECONDS = 600
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
@@ -201,7 +200,7 @@ def _parse_custom_specifics(raw: str) -> Dict[str, str]:
 
 @app.route("/")
 def index() -> str:
-    return render_template("index.html", default_new_tab_url=DEFAULT_NEW_TAB_URL)
+    return render_template("index.html")
 
 
 @app.route("/callback")
