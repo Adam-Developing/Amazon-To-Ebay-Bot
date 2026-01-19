@@ -6,6 +6,7 @@ import time
 import base64
 import threading
 import tempfile
+import hashlib
 from typing import Optional
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -31,7 +32,12 @@ _OAUTH_CODE_LOCK = threading.Lock()
 _OAUTH_CODE_EVENT = threading.Event()
 _OAUTH_CODE_VALUE: Optional[str] = None
 OAUTH_CODE_TIMEOUT_SECONDS = 600
-_OAUTH_CODE_FILE = os.path.join(tempfile.gettempdir(), "amazon_to_ebay_oauth_code.txt")
+
+
+def _oauth_code_file_path() -> str:
+    secret = CLIENT_SECRET or ""
+    token = hashlib.sha256(secret.encode()).hexdigest()[:12] if secret else "default"
+    return os.path.join(tempfile.gettempdir(), f"amazon_to_ebay_oauth_{token}.txt")
 
 
 def _reload_env() -> None:
@@ -52,15 +58,16 @@ def _poll_oauth_code() -> Optional[str]:
         _OAUTH_CODE_VALUE = None
         _OAUTH_CODE_EVENT.clear()
         return code
-    if os.path.exists(_OAUTH_CODE_FILE):
+    code_file = _oauth_code_file_path()
+    if os.path.exists(code_file):
         try:
-            with open(_OAUTH_CODE_FILE, "r", encoding="utf-8") as handle:
+            with open(code_file, "r", encoding="utf-8") as handle:
                 code = handle.read().strip()
-        except Exception:
+        except OSError:
             code = ""
         try:
-            os.remove(_OAUTH_CODE_FILE)
-        except Exception:
+            os.remove(code_file)
+        except OSError:
             pass
         if code:
             _OAUTH_CODE_EVENT.clear()
@@ -77,9 +84,10 @@ def set_oauth_callback_code(code: str) -> None:
         _OAUTH_CODE_VALUE = code
         _OAUTH_CODE_EVENT.set()
         try:
-            with open(_OAUTH_CODE_FILE, "w", encoding="utf-8") as handle:
+            fd = os.open(_oauth_code_file_path(), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(code)
-        except Exception:
+        except OSError:
             pass
 
 
