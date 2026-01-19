@@ -79,12 +79,8 @@ function isBlockedHost(hostname) {
         return false;
     }
     const host = hostname.toLowerCase();
-    const exactBlockedHosts = ["google.com"];
-    const blockedHostSuffixes = [".google.com", ".ebay.com", ".ebay.co.uk"];
-    if (exactBlockedHosts.includes(host)) {
-        return true;
-    }
-    return blockedHostSuffixes.some((suffix) => host.endsWith(suffix));
+    const blockedBaseDomains = ["google.com", "ebay.com", "ebay.co.uk"];
+    return blockedBaseDomains.some((domain) => host === domain || host.endsWith(`.${domain}`));
 }
 
 function shouldEmbedUrl(url) {
@@ -256,12 +252,14 @@ function showBlockedTab(tab, url) {
     tab.blockedUrl = url;
     tab.iframe.src = "about:blank";
     tab.iframe.style.display = "none";
-    const host = getHostFromUrl(url) || url;
-    tab.messageText.textContent = `This site (${host}) blocks being embedded. Use “Open in new tab” to continue securely.`;
+    const host = getHostFromUrl(url);
+    const hostLabel = host || "this site";
+    tab.messageText.textContent = `This site (${hostLabel}) blocks being embedded. Use “Open in new tab” to continue securely.`;
     tab.message.hidden = false;
-    tab.titleSpan.textContent = `${host} (external)`.slice(0, 24);
+    tab.titleSpan.textContent = `${hostLabel} (external)`.slice(0, 24);
     elements.addressBar.value = url;
-    postJson("/api/log", { message: `Embedded view blocked for ${host}. Use Open in new tab.` }).catch((error) => {
+    const logLabel = host || "unknown site";
+    postJson("/api/log", { message: `Embedded view blocked for ${logLabel}. Use Open in new tab.` }).catch((error) => {
         console.warn("Failed to log blocked host", error);
     });
 }
