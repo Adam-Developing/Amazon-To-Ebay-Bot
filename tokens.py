@@ -42,14 +42,17 @@ def _reload_env() -> None:
     REDIRECT_URI_HOST = os.getenv("EBAY_REDIRECT_URI_HOST")
 
 
-def _consume_oauth_code() -> Optional[str]:
-    """Consume the cached OAuth code. Caller must hold _OAUTH_CODE_LOCK."""
+def _poll_oauth_code() -> Optional[str]:
+    """Return any cached OAuth code and clear stale events. Caller must hold _OAUTH_CODE_LOCK."""
     global _OAUTH_CODE_VALUE
-    if not _OAUTH_CODE_VALUE:
-        return None
-    code = _OAUTH_CODE_VALUE
-    _OAUTH_CODE_VALUE = None
-    return code
+    if _OAUTH_CODE_VALUE:
+        code = _OAUTH_CODE_VALUE
+        _OAUTH_CODE_VALUE = None
+        _OAUTH_CODE_EVENT.clear()
+        return code
+    if _OAUTH_CODE_EVENT.is_set():
+        _OAUTH_CODE_EVENT.clear()
+    return None
 
 
 def set_oauth_callback_code(code: str) -> None:
@@ -66,21 +69,14 @@ def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
     deadline = time.monotonic() + OAUTH_CODE_TIMEOUT_SECONDS
     while True:
         with _OAUTH_CODE_LOCK:
-            code = _consume_oauth_code()
+            code = _poll_oauth_code()
             if code:
-                _OAUTH_CODE_EVENT.clear()
                 return code
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             io.log("Timed out waiting for OAuth callback code.")
             return None
         _OAUTH_CODE_EVENT.wait(remaining)
-        with _OAUTH_CODE_LOCK:
-            code = _consume_oauth_code()
-            if code:
-                _OAUTH_CODE_EVENT.clear()
-                return code
-            _OAUTH_CODE_EVENT.clear()
 
 
 def save_tokens(tokens, io: IOBridge):
