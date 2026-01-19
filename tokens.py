@@ -59,8 +59,7 @@ def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
             _OAUTH_CODE_VALUE = None
             _OAUTH_CODE_EVENT.clear()
             return code
-        if _OAUTH_CODE_EVENT.is_set():
-            _OAUTH_CODE_EVENT.clear()
+        _OAUTH_CODE_EVENT.clear()
     _OAUTH_CODE_EVENT.wait()
     with _OAUTH_CODE_LOCK:
         code = _OAUTH_CODE_VALUE
