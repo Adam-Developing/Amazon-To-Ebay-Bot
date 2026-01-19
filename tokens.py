@@ -29,6 +29,7 @@ API_ENDPOINT = "https://api.ebay.com/identity/v1/oauth2/token"
 _OAUTH_CODE_LOCK = threading.Lock()
 _OAUTH_CODE_EVENT = threading.Event()
 _OAUTH_CODE_VALUE: Optional[str] = None
+OAUTH_CODE_TIMEOUT_SECONDS = 600
 
 
 def _reload_env() -> None:
@@ -53,6 +54,7 @@ def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
     """Block until an external callback provides the OAuth code."""
     global _OAUTH_CODE_VALUE
     io.log("Waiting for authorization code via web callback…")
+    deadline = time.monotonic() + OAUTH_CODE_TIMEOUT_SECONDS
     while True:
         with _OAUTH_CODE_LOCK:
             if _OAUTH_CODE_VALUE:
@@ -61,7 +63,11 @@ def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
                 _OAUTH_CODE_EVENT.clear()
                 return code
             _OAUTH_CODE_EVENT.clear()
-        _OAUTH_CODE_EVENT.wait()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            io.log("Timed out waiting for OAuth callback code.")
+            return None
+        _OAUTH_CODE_EVENT.wait(remaining)
 
 
 def save_tokens(tokens, io: IOBridge):
