@@ -5,6 +5,7 @@ import json
 import time
 import base64
 import threading
+import tempfile
 from typing import Optional
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -30,6 +31,7 @@ _OAUTH_CODE_LOCK = threading.Lock()
 _OAUTH_CODE_EVENT = threading.Event()
 _OAUTH_CODE_VALUE: Optional[str] = None
 OAUTH_CODE_TIMEOUT_SECONDS = 600
+_OAUTH_CODE_FILE = os.path.join(tempfile.gettempdir(), "amazon_to_ebay_oauth_code.txt")
 
 
 def _reload_env() -> None:
@@ -50,6 +52,19 @@ def _poll_oauth_code() -> Optional[str]:
         _OAUTH_CODE_VALUE = None
         _OAUTH_CODE_EVENT.clear()
         return code
+    if os.path.exists(_OAUTH_CODE_FILE):
+        try:
+            with open(_OAUTH_CODE_FILE, "r", encoding="utf-8") as handle:
+                code = handle.read().strip()
+        except Exception:
+            code = ""
+        try:
+            os.remove(_OAUTH_CODE_FILE)
+        except Exception:
+            pass
+        if code:
+            _OAUTH_CODE_EVENT.clear()
+            return code
     if _OAUTH_CODE_EVENT.is_set():
         _OAUTH_CODE_EVENT.clear()
     return None
@@ -61,6 +76,11 @@ def set_oauth_callback_code(code: str) -> None:
     with _OAUTH_CODE_LOCK:
         _OAUTH_CODE_VALUE = code
         _OAUTH_CODE_EVENT.set()
+        try:
+            with open(_OAUTH_CODE_FILE, "w", encoding="utf-8") as handle:
+                handle.write(code)
+        except Exception:
+            pass
 
 
 def _wait_for_external_oauth_code(io: IOBridge) -> Optional[str]:
