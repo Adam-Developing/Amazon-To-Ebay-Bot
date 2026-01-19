@@ -7,6 +7,7 @@ import base64
 import threading
 import tempfile
 import hashlib
+import secrets
 from typing import Optional
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -32,11 +33,12 @@ _OAUTH_CODE_LOCK = threading.Lock()
 _OAUTH_CODE_EVENT = threading.Event()
 _OAUTH_CODE_VALUE: Optional[str] = None
 OAUTH_CODE_TIMEOUT_SECONDS = 600
+_OAUTH_FILE_FALLBACK_SALT = secrets.token_hex(16)
 
 
 def _oauth_code_file_path() -> str:
-    secret = CLIENT_SECRET or ""
-    token = hashlib.sha256(secret.encode()).hexdigest()[:12] if secret else "default"
+    salt = CLIENT_SECRET or CLIENT_ID or RUNAME or _OAUTH_FILE_FALLBACK_SALT
+    token = hashlib.sha256(salt.encode()).hexdigest()[:32]
     return os.path.join(tempfile.gettempdir(), f"amazon_to_ebay_oauth_{token}.txt")
 
 
