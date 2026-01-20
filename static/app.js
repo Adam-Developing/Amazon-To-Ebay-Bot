@@ -106,6 +106,8 @@ function hidePrompt() {
     elements.promptPanel.hidden = true;
 }
 
+hidePrompt();
+
 async function submitPrompt(value) {
     if (activePromptId === null) {
         return;
