@@ -25,6 +25,7 @@ const elements = {
     statusMessage: document.getElementById("statusMessage"),
     bulkItems: document.getElementById("bulkItems"),
     bulkMeta: document.getElementById("bulkMeta"),
+    bulkPreview: document.getElementById("bulkPreview"),
     panelTabs: document.querySelectorAll(".panel-tab"),
     panelBodies: document.querySelectorAll(".panel-body"),
 };
@@ -72,6 +73,9 @@ function toggleTabPanel(targetId) {
     elements.panelBodies.forEach((panel) => {
         panel.classList.toggle("active", panel.id === targetId);
     });
+    if (elements.bulkPreview) {
+        elements.bulkPreview.hidden = targetId !== "bulk-panel";
+    }
 }
 
 function showPrompt(prompt) {

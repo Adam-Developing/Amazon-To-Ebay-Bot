@@ -51,10 +51,6 @@ Size: L | Colour: Red
                 <button id="bulkPauseBtn" type="button" class="secondary" hidden>Pause</button>
                 <button id="bulkCancelBtn" type="button" class="secondary" hidden>Cancel</button>
             </div>
-            <div class="bulk-preview">
-                <div id="bulkMeta" class="bulk-summary">Paste bulk text to preview items.</div>
-                <div id="bulkItems" class="bulk-items"></div>
-            </div>
         </div>
 
         <div class="status-card">
@@ -73,6 +69,11 @@ Size: L | Colour: Red
                 <button id="promptOk" type="button">OK</button>
                 <button id="promptCancel" type="button" class="secondary">Cancel</button>
             </div>
+        </div>
+
+        <div id="bulkPreview" class="bulk-preview" hidden>
+            <div id="bulkMeta" class="bulk-summary">Paste bulk text to preview items.</div>
+            <div id="bulkItems" class="bulk-items"></div>
         </div>
 
         <button id="toggleLogBtn" type="button" class="log-toggle">Show Log</button>
