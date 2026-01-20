@@ -111,8 +111,13 @@ button.secondary {
     border-radius: 8px;
     background: #fbfbfd;
     display: none;
-    flex-direction: column;
+    /* Use a horizontal, responsive layout so children sizes are proportional */
+    flex-direction: row;
+    align-items: center;
     gap: 8px;
+    flex-wrap: wrap; /* allow wrapping on narrow screens */
+    width: 100%;
+    max-width: 720px; /* cap overall panel width */
 }
 
 .prompt-panel input,
@@ -120,6 +125,28 @@ button.secondary {
     padding: 6px 8px;
     border-radius: 6px;
     border: 1px solid #c6c9cf;
+    /* Allow input/select to grow/shrink proportionally with surrounding elements */
+    flex: 1 1 360px; /* grow, shrink, base width */
+    min-width: 140px;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+/* Ensure the buttons sit to the right when there's space */
+.prompt-panel .button-row {
+    display: flex;
+    gap: 8px;
+    flex: 0 0 auto; /* don't grow */
+    margin-left: auto; /* push buttons to the end of the row */
+}
+
+/* When the panel wraps, make the button row take full width so buttons appear on their own line */
+@media (max-width: 520px) {
+    .prompt-panel .button-row {
+        margin-left: 0;
+        width: 100%;
+        justify-content: flex-start;
+    }
 }
 
 .status-card {
@@ -276,7 +303,14 @@ button.secondary {
     background: #10131a;
     color: #e8e8e8;
     padding: 8px;
-    height: 200px;
+    /* Use flexible sizing so the log isn't squished when earlier content grows.
+       - min-height prevents it collapsing to an unusably small area
+       - max-height limits how tall it can grow (relative to viewport)
+       - height: auto lets it size naturally between those limits
+       - overflow-y keeps internal scrolling when logs overflow the box */
+    height: auto;
+    min-height: 140px;
+    max-height: 45vh;
     overflow-y: auto;
     font-family: "Consolas", "Courier New", monospace;
     white-space: pre-wrap;

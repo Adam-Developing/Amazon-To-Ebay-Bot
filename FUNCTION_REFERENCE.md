@@ -146,7 +146,7 @@ Quick reference for finding specific functions in the Amazon-To-Ebay Bot codebas
 Amazon-To-Ebay-Bot/
 ├── main.py                  # Entry point (5 lines)
 ├── web_app.py               # Web application (498 lines)
-├── gui.py                   # Legacy GUI application (1306 lines)
+├── gui.py                   # Compatibility shim delegating to the web UI (small)
 ├── amazon.py                # Amazon scraping (247 lines)
 ├── ebay.py                  # eBay listing (344 lines)
 ├── tokens.py                # OAuth management (210 lines)
@@ -157,9 +157,7 @@ Amazon-To-Ebay-Bot/
 ├── static/                  # Web UI assets (JS/CSS)
 ├── requirements.txt         # Python dependencies
 ├── .env                     # Environment variables
-├── webview.qml              # QML web view component
-├── README.md                # Main documentation (768 lines)
-└── FUNCTION_REFERENCE.md    # This file
+└── README.md                # Main documentation (768 lines)
 ```
 
 ## Data Structures

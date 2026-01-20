@@ -112,6 +112,7 @@ def _build_bulk_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "quantity": item.get("quantity", 1),
                 "note": item.get("note", ""),
                 "custom_specifics": item.get("custom_specifics", {}),
+                "title": item.get("title", ""),
                 "status": "Ready",
                 "message": "",
             }

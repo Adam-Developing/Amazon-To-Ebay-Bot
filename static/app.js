@@ -493,6 +493,14 @@ function renderBulkItems(items) {
         url.className = "bulk-item-url";
         url.textContent = item.url || "Missing URL";
 
+        // Show parsed product title when available
+        if (item.title) {
+            const titleLine = document.createElement("div");
+            titleLine.className = "bulk-item-product-title";
+            titleLine.textContent = item.title;
+            body.appendChild(titleLine);
+        }
+
         const meta = document.createElement("div");
         meta.className = "bulk-item-meta";
         const specifics = item.custom_specifics && Object.keys(item.custom_specifics).length

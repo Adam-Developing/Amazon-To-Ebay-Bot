@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import webbrowser
 import xml.etree.ElementTree as ET
 import requests
 from typing import Dict, Any
@@ -16,10 +15,57 @@ from CentralFunctions import (
     set_seller_note,
     find_minimum_price,
     map_one_dict,
-    merge_specifics_in_order,
 )
 
 load_dotenv()
+
+# Helper: choose the most actionable part of an eBay error message
+def _choose_error_message(short: str, long: str) -> str:
+    """
+    Prefer the more detailed/last part of the error. Strategy:
+    - If long exists and is different, prefer long.
+    - If combined (short + ' - ' + long) contains ' - ', take the last segment.
+    - Otherwise fall back to the last sentence (split on .!?), trim and return.
+    """
+    s = (short or "").strip()
+    l = (long or "").strip()
+    combined = " - ".join([p for p in [s, l] if p])
+    # If combined contains ' - ' prefer the last segment
+    if ' - ' in combined:
+        candidate = combined.split(' - ')[-1].strip()
+    else:
+        candidate = combined or s or l
+    # If candidate contains multiple sentences, prefer the last non-empty sentence
+    sentences = re.split(r'[.!?]\s*', candidate)
+    for sent in reversed(sentences):
+        if sent and sent.strip():
+            return sent.strip()
+    return candidate
+
+# Helper: detect a missing item specific field from a message
+def _detect_missing_field(message: str) -> str | None:
+    """
+    Try multiple patterns to extract the missing field name, returning the field if found.
+    """
+    if not message:
+        return None
+    m = re.search(r"item specific\s+(?P<field>[A-Za-z0-9 _-]+)\s+is missing", message, re.IGNORECASE)
+    if m:
+        return m.group('field').strip()
+    m = re.search(r"^The item specific (?P<field>[A-Za-z0-9 _-]+) is missing", message, re.IGNORECASE)
+    if m:
+        return m.group('field').strip()
+    m = re.search(r"Add (?P<field>[A-Za-z0-9 _-]+) to this listing", message, re.IGNORECASE)
+    if m:
+        return m.group('field').strip()
+    m = re.search(r"(?P<field>[A-Za-z0-9 _-]+) is required", message, re.IGNORECASE)
+    if m:
+        return m.group('field').strip()
+    # Try a looser heuristic: look for "Type" or "Brand" capitalised words often used for specifics
+    m = re.search(r"\b(Type|Brand|Model|Colour|Color|Size|Material|Condition)\b", message, re.IGNORECASE)
+    if m:
+        return m.group(0).strip()
+    return None
 
 BANNED_PHRASES = [
     r"warranty",
@@ -69,7 +115,7 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     if title_variable == 'N/A':
         amazonUrl = data.get("URL", "Unknown")
         if amazonUrl != "Unknown":
-            io.open_url(amazonUrl);
+            io.open_url(amazonUrl)
             amazon_open = True
         title_variable = esc_xml(io.prompt_text('What is the title:', default="").strip())
 
@@ -82,7 +128,7 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
         if not amazon_open:
             amazonUrl = data.get("URL", "Unknown")
             if amazonUrl != "Unknown":
-                io.open_url(amazonUrl);
+                io.open_url(amazonUrl)
                 amazon_open = True
         entered = io.prompt_text("What is the price:", default="").strip()
         try:
@@ -103,16 +149,23 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     if not amazon_open:
         amazonUrl = data.get("URL", "Unknown")
         if amazonUrl != "Unknown":
-            io.open_url(amazonUrl);
+            io.open_url(amazonUrl)
             amazon_open = True
 
     if price_variable > 6:
         price_variable -= 1
     elif 0 < price_variable < 6:
-        off = io.prompt_text("Price is less than 6, what should we take off?", default="0").strip()
+        # Price is small — ask how much to take off (original behavior).
+        # Include the sell price suggestion in brackets (formatted to 2 decimals).
+        suggested = f"{price_variable:.2f}"
+        prompt = f"Price is less than 6, what should we take off? (Currently at: £{suggested})"
+        off = io.prompt_text(prompt, default="0").strip()
         try:
             price_variable -= float(off)
+            # Round to 2 decimals to keep prices neat
+            price_variable = round(price_variable, 2)
         except Exception:
+            # ignore invalid input and leave price_variable as-is
             pass
 
     if bool(os.getenv("SELLER_PAY_FEE").lower() == "true"):
@@ -221,7 +274,7 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     if not amazon_open:
         amazonUrl = data.get("URL", "Unknown")
         if amazonUrl != "Unknown":
-            io.open_url(amazonUrl);
+            io.open_url(amazonUrl)
             amazon_open = True
 
     itemSpecifics = get_item_specifics(applicationToken, categoryTree, catID, data, io)
@@ -357,14 +410,64 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                     io.log(f"Error: {short_message} - {long_message}")
                     errors.append({"short": short_message, "long": long_message})
 
+                # Pre-scan errors to see if there's any actionable problem other than Best Offer/AutoPay conflicts.
+                # If so, we'll skip prompting about Best Offer and handle the other errors first.
+                has_other_actionable = False
+                for e in errors:
+                    _short = e.get('short', '') or ''
+                    _long = e.get('long', '') or ''
+                    _actionable = _choose_error_message(_short, _long)
+                    # Missing specific
+                    if _detect_missing_field(_actionable):
+                        has_other_actionable = True
+                        break
+                    # Field length/value errors
+                    if re.search(r"(?P<field>[\w ]+)'s value of \"(?P<value>.+?)\" is too (long|short)", _long, re.IGNORECASE):
+                        has_other_actionable = True
+                        break
+                    # Generic 'too many characters' pattern
+                    if re.search(r'"(?P<val>.{10,})" has too many characters|too many characters.*\"(?P<val2>.+?)\"', _long, re.IGNORECASE):
+                        has_other_actionable = True
+                        break
+
                 # Try to detect field-specific errors like: "Type's value of \"...\" is too long. Enter a value of no more than 65 characters."
                 handled_any = False
                 for err in errors:
                     long = err.get('long', '') or ''
                     short = err.get('short', '') or ''
 
-                    # Best Offer vs AutoPay conflict
-                    if re.search(r"Best Offer.*immediate payment|immediate payment.*Best Offer", long + ' ' + short, re.IGNORECASE):
+                    # Prefer the most actionable fragment for decision-making
+                    actionable = _choose_error_message(short, long)
+
+                    # Detect missing specifics first
+                    missing = _detect_missing_field(actionable)
+                    if missing:
+                        # Ask the user for the missing specific and insert into itemSpecifics
+                        prompt = f"eBay reports a missing item specific: '{missing}'. Please provide a value for '{missing}':"
+                        value = io.prompt_text(prompt, default="").strip()
+                        if not value:
+                            io.log(f"User did not provide a value for required specific '{missing}'; aborting.")
+                            return {"ok": False, "ack": ack, "errors": errors}
+                        # Find a matching key (case-insensitive) or add new
+                        matched = None
+                        for k in list(itemSpecifics.keys()):
+                            if k.lower() == missing.lower() or missing.lower() in k.lower() or k.lower() in missing.lower():
+                                matched = k
+                                break
+                        if matched:
+                            itemSpecifics[matched] = value
+                        else:
+                            itemSpecifics[missing] = value
+                        io.log(f"Added missing item specific '{missing}': '{value}'. Retrying.")
+                        handled_any = True
+                        break
+
+                    # Best Offer vs AutoPay conflict (use actionable text)
+                    if re.search(r"Best Offer.*immediate payment|immediate payment.*Best Offer", actionable + ' ' + short, re.IGNORECASE):
+                        # If there are other actionable errors, skip resolving Best Offer now so we can address them first.
+                        if has_other_actionable:
+                            io.log("Skipping Best Offer/AutoPay policy prompt because other actionable errors are present; resolving those first.")
+                            continue
                         choice = io.prompt_choice(
                             "eBay reports a policy conflict: If this item sells by a Best Offer, you will not be able to require immediate payment.\nChoose how to proceed:",
                             ["Disable Best Offer", "Disable Immediate Payment", "Cancel"]
@@ -383,7 +486,7 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                             io.log("User cancelled while resolving policy conflict.")
                             return {"ok": False, "ack": ack, "errors": errors}
 
-                    # Field length or value errors
+                    # Field length or value errors (use 'long' original matching as before)
                     m = re.search(r"(?P<field>[\w ]+)'s value of \"(?P<value>.+?)\" is too (?P<issue>long|short)", long, re.IGNORECASE)
                     if m:
                         field = m.group('field').strip()
