@@ -162,9 +162,9 @@ Run the main script:
 python main.py
 ```
 
-This will launch the web server. Open `http://localhost:5000` in your browser to access the interface:
-- **Left Panel**: Controls for single/bulk listing
-- **Right Panel**: Integrated browser panel for Amazon and eBay
+This will launch the web server. Open `http://localhost:5000` in your browser to access the interface.
+
+Note: The desktop PyQt-based GUI (with an embedded QML web view) has been removed from this project; the application now provides a browser-based UI served by Flask. Open the URL above in your preferred browser to use the app.
 
 ### First-Time Setup: Authenticate with eBay
 

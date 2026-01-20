@@ -44,12 +44,18 @@ OPEN_URL_LOCK = threading.Lock()
 STATE: Dict[str, Any] = {
     "product": None,
     "processing": False,
+    "status": {
+        "label": "Idle",
+        "message": "Ready to start.",
+        "tone": "idle",
+    },
     "bulk": {
         "running": False,
         "paused": False,
         "cancelled": False,
         "processed": 0,
         "total": 0,
+        "items": [],
     },
 }
 
@@ -71,6 +77,11 @@ def _set_processing(value: bool) -> None:
         STATE["processing"] = value
 
 
+def _set_status(label: str, message: str, tone: str = "idle") -> None:
+    with STATE_LOCK:
+        STATE["status"] = {"label": label, "message": message, "tone": tone}
+
+
 def _set_product(product: Optional[Dict[str, Any]]) -> None:
     with STATE_LOCK:
         STATE["product"] = product
@@ -89,6 +100,47 @@ def _is_bulk_running() -> bool:
 def _update_bulk_state(**updates: Any) -> None:
     with STATE_LOCK:
         STATE["bulk"].update(updates)
+
+
+def _build_bulk_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    prepared = []
+    for idx, item in enumerate(items, start=1):
+        prepared.append(
+            {
+                "index": idx,
+                "url": item.get("url", ""),
+                "quantity": item.get("quantity", 1),
+                "note": item.get("note", ""),
+                "custom_specifics": item.get("custom_specifics", {}),
+                "title": item.get("title", ""),
+                "status": "Ready",
+                "message": "",
+            }
+        )
+    return prepared
+
+
+def _set_bulk_items(items: List[Dict[str, Any]]) -> None:
+    _update_bulk_state(items=items, total=len(items), processed=0)
+
+
+def _update_bulk_item(index: int, status: str, message: str = "") -> None:
+    updated = False
+    items_copy = None
+    with STATE_LOCK:
+        items = STATE["bulk"].get("items", [])
+        if 0 <= index < len(items):
+            items[index]["status"] = status
+            items[index]["message"] = message
+            updated = True
+            # make a shallow copy of items for the updater to publish outside the lock
+            items_copy = [dict(it) for it in items]
+    if updated:
+        # Publish the updated items into STATE via the helper so api_state will return them
+        _update_bulk_state(items=items_copy)
+        _append_log(f"Bulk item {index + 1} status updated to '{status}': {message}")
+    else:
+        _append_log(f"Bulk item index {index} is out of range.")
 
 
 def _append_log(msg: str) -> None:
@@ -215,10 +267,13 @@ def oauth_callback():
 @app.get("/api/state")
 def api_state():
     with STATE_LOCK:
+        bulk_state = dict(STATE["bulk"])
+        bulk_state["items"] = [dict(item) for item in bulk_state.get("items", [])]
         state = {
             "product_loaded": STATE["product"] is not None,
             "processing": STATE["processing"],
-            "bulk": STATE["bulk"],
+            "status": dict(STATE["status"]),
+            "bulk": bulk_state,
         }
     return jsonify(state)
 
@@ -278,6 +333,7 @@ def api_load_json():
         return jsonify({"ok": False, "error": f"Failed to parse JSON: {exc}"}), 400
     _set_product(data)
     _append_log(f"Loaded product from {file.filename}")
+    _set_status("Ready", "Product loaded from JSON.", "success")
     response = {
         "ok": True,
         "url": data.get("URL", ""),
@@ -291,6 +347,7 @@ def api_load_json():
 def api_auth():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
+    _set_status("Working", "Authorizing eBay...", "working")
 
     def work():
         _set_processing(True)
@@ -298,15 +355,18 @@ def api_auth():
             tokens = load_tokens()
             app_token = get_application_token(tokens, WEB_IO)
             if not app_token:
+                _set_status("Attention", "Failed to get application token.", "error")
                 return
             tokens["application_token"] = app_token
             save_tokens(tokens, WEB_IO)
             user_token = get_ebay_user_token(tokens, WEB_IO)
             if not user_token:
+                _set_status("Attention", "Failed to get user token.", "error")
                 return
             tokens["user_token"] = user_token
             save_tokens(tokens, WEB_IO)
             WEB_IO.log("All tokens are ready.")
+            _set_status("Ready", "All tokens are ready.", "success")
         finally:
             _set_processing(False)
 
@@ -318,6 +378,7 @@ def api_auth():
 def api_logout():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
+    _set_status("Working", "Logging out of eBay...", "working")
 
     def work():
         _set_processing(True)
@@ -325,8 +386,10 @@ def api_logout():
             ok = clear_user_token(WEB_IO)
             if ok:
                 WEB_IO.log("User token cleared. Re-authorize to reconnect your eBay account.")
+                _set_status("Ready", "Logged out from eBay.", "success")
             else:
                 WEB_IO.log("Failed to clear user token. Check permissions and try again.")
+                _set_status("Attention", "Failed to clear the eBay user token.", "error")
         finally:
             _set_processing(False)
 
@@ -352,6 +415,7 @@ def api_scrape():
             qty_value = None
     custom_specs_raw = str(payload.get("custom_specs", "")).strip()
     custom_specs = _parse_custom_specifics(custom_specs_raw) if custom_specs_raw else {}
+    _set_status("Working", "Scraping Amazon product...", "working")
 
     def work():
         _set_processing(True)
@@ -359,6 +423,7 @@ def api_scrape():
             product = scrape_amazon(url, note=note, quantity=qty_value, custom_specifics=custom_specs, io=WEB_IO)
             _set_product(product)
             WEB_IO.log("Product scraped. You can now list on eBay.")
+            _set_status("Ready", "Product scraped. Ready to list.", "success")
             try:
                 with open("product.json", "w", encoding="utf-8") as handle:
                     json.dump(product, handle, indent=2)
@@ -379,6 +444,7 @@ def api_list():
         product = STATE["product"]
     if not product:
         return jsonify({"ok": False, "error": "Please scrape or load a product first."}), 400
+    _set_status("Working", "Listing item on eBay...", "working")
 
     def work():
         _set_processing(True)
@@ -386,17 +452,37 @@ def api_list():
             ensured = _ensure_ebay_auth()
             if not ensured:
                 WEB_IO.log("Authentication failed. Check credentials and try again.")
+                _set_status("Attention", "Authentication failed. Check credentials.", "error")
                 return
             result = list_on_ebay(product, WEB_IO)
             if result.get("ok"):
                 WEB_IO.log(f"Listing complete. Item ID: {result.get('item_id')}")
+                _set_status("Ready", f"Listing complete. Item ID {result.get('item_id')}.", "success")
             else:
                 WEB_IO.log(f"Listing failed: {result}")
+                _set_status("Attention", "Listing failed. See log for details.", "error")
         finally:
             _set_processing(False)
 
     threading.Thread(target=work, daemon=True).start()
     return jsonify({"ok": True})
+
+
+@app.post("/api/bulk/preview")
+def api_bulk_preview():
+    payload = request.get_json(silent=True) or {}
+    text = str(payload.get("text", "")).strip()
+    with STATE_LOCK:
+        if STATE["bulk"]["running"]:
+            items = [dict(item) for item in STATE["bulk"].get("items", [])]
+            return jsonify({"ok": True, "items": items})
+    if not text:
+        _set_bulk_items([])
+        return jsonify({"ok": True, "items": []})
+    items = parse_bulk_items(text)
+    prepared = _build_bulk_items(items)
+    _set_bulk_items(prepared)
+    return jsonify({"ok": True, "items": prepared})
 
 
 @app.post("/api/bulk/process")
@@ -410,25 +496,35 @@ def api_bulk_process():
     items = parse_bulk_items(text)
     if not items:
         return jsonify({"ok": False, "error": "No items could be parsed from the text."}), 400
+    prepared_items = _build_bulk_items(items)
+    _set_bulk_items(prepared_items)
+    _set_status("Working", f"Bulk processing started ({len(items)} items).", "working")
 
     def work():
-        _update_bulk_state(running=True, paused=False, cancelled=False, processed=0, total=len(items))
+        _update_bulk_state(running=True, paused=False, cancelled=False, processed=0, total=len(prepared_items))
         bulk_pause_event.set()
         bulk_cancel_event.clear()
         try:
             ensured = _ensure_ebay_auth()
             if not ensured:
                 WEB_IO.log("Authentication failed. Check credentials and try again.")
+                _set_status("Attention", "Authentication failed. Check credentials.", "error")
                 return
             os.makedirs("bulk_products", exist_ok=True)
             processed_count = 0
-            total_items = len(items)
-            for idx, item in enumerate(items, start=1):
+            total_items = len(prepared_items)
+            for index, item in enumerate(prepared_items):
+                display_index = item.get("index", index + 1)
                 bulk_pause_event.wait()
                 if bulk_cancel_event.is_set():
                     WEB_IO.log("Bulk process cancelled.")
+                    _update_bulk_item(index, "Cancelled", "Cancelled before processing.")
+                    for remaining_index in range(index + 1, total_items):
+                        _update_bulk_item(remaining_index, "Cancelled", "Cancelled before processing.")
                     break
-                WEB_IO.log(f"=== Processing Item {idx}/{total_items} ===")
+                _set_status("Working", f"Processing item {display_index} of {total_items}.", "working")
+                _update_bulk_item(index, "Scraping", "Scraping Amazon listing.")
+                WEB_IO.log(f"=== Processing Item {display_index}/{total_items} ===")
                 product = scrape_amazon(
                     item.get("url", ""),
                     note=item.get("note", ""),
@@ -437,16 +533,32 @@ def api_bulk_process():
                     io=WEB_IO,
                 )
                 if not product:
-                    WEB_IO.log(f"Skipping item {idx} due to scraping failure.")
+                    WEB_IO.log(f"Skipping item {display_index} due to scraping failure.")
+                    _update_bulk_item(index, "Failed", "Scrape failed.")
                     continue
-                with open(os.path.join("bulk_products", f"product_{idx}.json"), "w", encoding="utf-8") as handle:
+                with open(
+                    os.path.join("bulk_products", f"product_{display_index}.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as handle:
                     json.dump(product, handle, indent=2)
+                _update_bulk_item(index, "Listing", "Listing on eBay.")
                 result = list_on_ebay(product, WEB_IO)
                 if result.get("ok"):
                     processed_count += 1
+                    _update_bulk_item(
+                        index,
+                        "Listed",
+                        f"Listed successfully (Item ID {result.get('item_id')}).",
+                    )
+                else:
+                    _update_bulk_item(index, "Failed", "Listing failed.")
                 _update_bulk_state(processed=processed_count)
             if not bulk_cancel_event.is_set():
                 WEB_IO.log(f"Bulk processing finished. Processed {processed_count} items.")
+                _set_status("Ready", "Bulk processing finished.", "success")
+            else:
+                _set_status("Attention", "Bulk processing cancelled.", "warning")
         finally:
             _update_bulk_state(running=False, paused=False, cancelled=bulk_cancel_event.is_set())
 
@@ -462,10 +574,12 @@ def api_bulk_pause():
         bulk_pause_event.clear()
         _update_bulk_state(paused=True)
         WEB_IO.log("Bulk processing paused.")
+        _set_status("Paused", "Bulk processing paused.", "warning")
         return jsonify({"ok": True, "paused": True})
     bulk_pause_event.set()
     _update_bulk_state(paused=False)
     WEB_IO.log("Bulk processing resumed.")
+    _set_status("Working", "Bulk processing resumed.", "working")
     return jsonify({"ok": True, "paused": False})
 
 
@@ -478,6 +592,7 @@ def api_bulk_cancel():
         bulk_pause_event.set()
     _update_bulk_state(cancelled=True)
     WEB_IO.log("Cancellation requested...")
+    _set_status("Attention", "Bulk processing cancellation requested.", "warning")
     return jsonify({"ok": True})
 
 

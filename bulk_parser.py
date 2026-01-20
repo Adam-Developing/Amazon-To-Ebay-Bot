@@ -60,7 +60,8 @@ def parse_bulk_items(text: str) -> List[Dict]:
     for block in blocks:
         url = ''
         qty = None
-        local_note = ''
+        # collect multiple local notes, then join later
+        local_notes: List[str] = []
         custom_specifics: Dict[str, str] = {}
 
         # 1. Scan block for URL and properties
@@ -78,10 +79,12 @@ def parse_bulk_items(text: str) -> List[Dict]:
                 qty = int(m_qty.group(1))
                 continue
 
-            # Check Explicit Note (inside the block)
+            # Check Explicit Note (inside the block) - collect all note lines
             m_note = _note_re.match(ln)
             if m_note:
-                local_note = m_note.group(1).strip()
+                note_val = m_note.group(1).strip()
+                if note_val:
+                    local_notes.append(note_val)
                 continue
 
             # Check Specifics (Key: Value)
@@ -100,14 +103,54 @@ def parse_bulk_items(text: str) -> List[Dict]:
             continue
 
         # 3. It is an item (has URL). Apply logic.
-        # Specific local note takes priority over the global header note
-        final_note = local_note if local_note else current_global_note
+        # Merge local notes; if none, use the global header note. If both exist, combine them.
+        final_note_parts: List[str] = []
+        if current_global_note:
+            final_note_parts.append(current_global_note)
+        if local_notes:
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_local = []
+            for n in local_notes:
+                if n not in seen:
+                    seen.add(n)
+                    unique_local.append(n)
+            final_note_parts.extend(unique_local)
+
+        final_note = ' \n '.join(final_note_parts).strip()
+
+        # 4. New: attempt to heuristically find a product title inside the block.
+        # Candidates are lines that are not URL/qty/note and do not look like key:value specifics.
+        title_candidates: List[str] = []
+        for ln in block:
+            # Skip URL/qty/note lines
+            if _url_re.search(ln) or _qty_re.match(ln) or _note_re.match(ln):
+                continue
+            # If the line contains a ':' but parses as specifics, skip it
+            if ':' in ln:
+                if _parse_specifics_line(ln):
+                    continue
+            # Skip extremely short lines
+            stripped = ln.strip()
+            if len(stripped) < 10:
+                continue
+            # Heuristic: avoid lines that look like codes (mostly uppercase alnum, like X002F8MT1B)
+            if re.match(r'^[A-Z0-9\-]{6,}$', stripped):
+                continue
+            title_candidates.append(stripped)
+
+        # Prefer the longest candidate (likely the product title); fallback to first candidate
+        parsed_title = ''
+        if title_candidates:
+            title_candidates.sort(key=lambda s: len(s), reverse=True)
+            parsed_title = title_candidates[0]
 
         items.append({
             "url": url,
             "quantity": qty if qty is not None else 1,
             "note": final_note,
-            "custom_specifics": custom_specifics
+            "custom_specifics": custom_specifics,
+            "title": parsed_title,
         })
 
     return items
