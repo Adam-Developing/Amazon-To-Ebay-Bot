@@ -72,7 +72,7 @@ async function postJson(url, payload) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload || {}),
     });
-    let data = {};
+    let data;
     try {
         data = await response.json();
     } catch (error) {
@@ -88,7 +88,40 @@ function openExternal(url) {
     if (!url) {
         return;
     }
-    window.open(url, "_blank", "noopener");
+
+    // Send a message to any installed helper extension via window.postMessage.
+    // The extension's content script can intercept this and ask the extension
+    // background script to create the new tab at the index (currentTab.index + 1).
+    // We wait briefly for an acknowledgement; if no extension handles it we
+    // open a normal new tab (_blank).
+    const request = { type: 'amazonToEbay_open_url_request', url };
+    let handled = false;
+
+    function onMessage(event) {
+        if (!event || !event.data) return;
+        const d = event.data;
+        if (d && d.type === 'amazonToEbay_open_url_handled' && d.url === url) {
+            handled = true;
+            window.removeEventListener('message', onMessage);
+        }
+    }
+
+    try {
+        window.addEventListener('message', onMessage);
+        window.postMessage(request, '*');
+    } catch (e) {
+        // ignore
+    }
+
+    // Wait briefly for extension to handle. If not handled, open a normal new tab.
+    setTimeout(() => {
+        if (handled) return;
+        try {
+            window.open(url, "_blank", "noopener");
+        } catch (e) {
+            // ignore
+        }
+    }, 250);
 }
 
 function toggleTabPanel(targetId) {

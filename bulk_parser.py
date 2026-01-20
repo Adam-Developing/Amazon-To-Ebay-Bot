@@ -117,7 +117,7 @@ def parse_bulk_items(text: str) -> List[Dict]:
                     unique_local.append(n)
             final_note_parts.extend(unique_local)
 
-        final_note = ' | '.join(final_note_parts).strip()
+        final_note = ' \n '.join(final_note_parts).strip()
 
         items.append({
             "url": url,

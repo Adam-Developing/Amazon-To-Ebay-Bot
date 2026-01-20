@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Amazon-To-Ebay-Bot - Open Next Tab Helper",
+  "version": "0.1",
+  "description": "Opens external links requested by the web app immediately to the right of the app tab.",
+  "permissions": ["tabs"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_script.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
