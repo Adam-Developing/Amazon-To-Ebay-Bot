@@ -125,13 +125,20 @@ def _set_bulk_items(items: List[Dict[str, Any]]) -> None:
 
 def _update_bulk_item(index: int, status: str, message: str = "") -> None:
     updated = False
+    items_copy = None
     with STATE_LOCK:
         items = STATE["bulk"].get("items", [])
         if 0 <= index < len(items):
             items[index]["status"] = status
             items[index]["message"] = message
             updated = True
-    if not updated:
+            # make a shallow copy of items for the updater to publish outside the lock
+            items_copy = [dict(it) for it in items]
+    if updated:
+        # Publish the updated items into STATE via the helper so api_state will return them
+        _update_bulk_state(items=items_copy)
+        _append_log(f"Bulk item {index + 1} status updated to '{status}': {message}")
+    else:
         _append_log(f"Bulk item index {index} is out of range.")
 
 

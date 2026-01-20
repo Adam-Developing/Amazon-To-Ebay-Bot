@@ -231,21 +231,29 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     if isinstance(custom_json_specifics, dict):
         itemSpecifics.update(map_one_dict(custom_json_specifics))
 
-    # Build XML fragments
-    item_specifics_xml = "<ItemSpecifics>"
-    for name, value in itemSpecifics.items():
-        escaped_value = esc_xml(str(value))
-        item_specifics_xml += f"<NameValueList><Name>{esc_xml(str(name))}</Name><Value>{escaped_value}</Value></NameValueList>"
-    item_specifics_xml += "</ItemSpecifics>"
+    # Prepare mutable flags that may be changed if eBay returns policy conflicts
+    auto_pay = True
+    best_offer_enabled = True
 
-    picture_xml = ""
-    if image_urls_array:
-        picture_xml += "<PictureDetails>"
-        for url in image_urls_array:
-            picture_xml += f"<PictureURL>{esc_xml(url)}</PictureURL>"
-        picture_xml += "</PictureDetails>"
+    # Helper to build XML body from current variables (rebuilds item specifics each attempt)
+    def build_xml_body():
+        item_specifics_xml = "<ItemSpecifics>"
+        for name, value in itemSpecifics.items():
+            escaped_value = esc_xml(str(value))
+            item_specifics_xml += f"<NameValueList><Name>{esc_xml(str(name))}</Name><Value>{escaped_value}</Value></NameValueList>"
+        item_specifics_xml += "</ItemSpecifics>"
 
-    xml_body = f"""<?xml version="1.0" encoding="utf-8"?>
+        picture_xml = ""
+        if image_urls_array:
+            picture_xml += "<PictureDetails>"
+            for url in image_urls_array:
+                picture_xml += f"<PictureURL>{esc_xml(url)}</PictureURL>"
+            picture_xml += "</PictureDetails>"
+
+        best_offer_fragment = f"<BestOfferDetails><BestOfferEnabled>{'true' if best_offer_enabled else 'false'}</BestOfferEnabled></BestOfferDetails>"
+        auto_pay_fragment = f"<AutoPay>{'true' if auto_pay else 'false'}</AutoPay>"
+
+        xml = f"""<?xml version="1.0" encoding="utf-8"?>
 <AddItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <RequesterCredentials>
     <eBayAuthToken>{user_token}</eBayAuthToken>
@@ -266,8 +274,8 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     <Location>Birmingham</Location>
     <PostalCode>B14 6PA</PostalCode>
     <Quantity>{ebayQuantity}</Quantity>
-    <AutoPay>true</AutoPay>
-    <BestOfferDetails><BestOfferEnabled>true</BestOfferEnabled></BestOfferDetails>
+    {auto_pay_fragment}
+    {best_offer_fragment}
     {picture_xml}
     <ReturnPolicy><ReturnsAcceptedOption>ReturnsNotAccepted</ReturnsAcceptedOption></ReturnPolicy>
     <ShippingDetails>
@@ -289,55 +297,174 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
   </Item>
 </AddItemRequest>
 """
+        return xml
 
-    endpoint = "https://api.ebay.com/ws/api.dll"
-    headers = {
-        "X-EBAY-API-CALL-NAME": "AddItem",
-        "X-EBAY-API-SITEID": "3",
-        "X-EBAY-API-APP-NAME": app_id,
-        "X-EBAY-API-DEV-NAME": dev_id,
-        "X-EBAY-API-CERT-NAME": cert_id,
-        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
-        "Content-Type": "text/xml"
-    }
+    # Attempt loop: try to submit, and if eBay reports actionable errors (field-specific), prompt user and retry
+    max_attempts = 4
+    attempt = 0
+    while attempt < max_attempts:
+        attempt += 1
+        xml_body = build_xml_body()
 
-    io.log("Sending eBay AddItem request…")
-    response = requests.post(endpoint, data=xml_body.encode('utf-8'), headers=headers)
-    io.log(f"HTTP Status Code: {response.status_code}")
+        endpoint = "https://api.ebay.com/ws/api.dll"
+        headers = {
+            "X-EBAY-API-CALL-NAME": "AddItem",
+            "X-EBAY-API-SITEID": "3",
+            "X-EBAY-API-APP-NAME": app_id,
+            "X-EBAY-API-DEV-NAME": dev_id,
+            "X-EBAY-API-CERT-NAME": cert_id,
+            "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+            "Content-Type": "text/xml"
+        }
 
-    result: Dict[str, Any] = {"ok": False, "status": response.status_code, "response": response.text}
+        io.log("Sending eBay AddItem request…")
+        response = requests.post(endpoint, data=xml_body.encode('utf-8'), headers=headers)
+        io.log(f"HTTP Status Code: {response.status_code}")
 
-    try:
-        tree = ET.fromstring(response.content)
-        namespace = '{urn:ebay:apis:eBLBaseComponents}'
-        ack_el = tree.find(f'{namespace}Ack')
-        ack = ack_el.text if ack_el is not None else "Unknown"
+        result: Dict[str, Any] = {"ok": False, "status": response.status_code, "response": response.text}
 
-        if ack in ['Success', 'Warning']:
-            io.log(f"API Call successful: {ack}")
-            item_id_element = tree.find(f'{namespace}ItemID')
-            if item_id_element is not None:
-                item_id = item_id_element.text
-                io.log(f"New Item ID: {item_id}")
-                if seller_note:
-                    set_seller_note(item_id, seller_note, user_token, app_id, dev_id, cert_id, io)
-                io.log("Opening the revise item page…")
-                revise_url = f"https://www.ebay.co.uk/sl/list?mode=ReviseItem&itemId={item_id}&ReturnURL=https%3A%2F%2Fwww.ebay.co.uk%2Fsh%2Flst%2Factive%3Foffset%3D0"
-                io.open_url(revise_url)
-                result.update({"ok": True, "ack": ack, "item_id": item_id})
+        try:
+            tree = ET.fromstring(response.content)
+            namespace = '{urn:ebay:apis:eBLBaseComponents}'
+            ack_el = tree.find(f'{namespace}Ack')
+            ack = ack_el.text if ack_el is not None else "Unknown"
+
+            if ack in ['Success', 'Warning']:
+                io.log(f"API Call successful: {ack}")
+                item_id_element = tree.find(f'{namespace}ItemID')
+                if item_id_element is not None:
+                    item_id = item_id_element.text
+                    io.log(f"New Item ID: {item_id}")
+                    if seller_note:
+                        set_seller_note(item_id, seller_note, user_token, app_id, dev_id, cert_id, io)
+                    io.log("Opening the revise item page…")
+                    revise_url = f"https://www.ebay.co.uk/sl/list?mode=ReviseItem&itemId={item_id}&ReturnURL=https%3A%2F%2Fwww.ebay.co.uk%2Fsh%2Flst%2Factive%3Foffset%3D0"
+                    io.open_url(revise_url)
+                    result.update({"ok": True, "ack": ack, "item_id": item_id})
+                else:
+                    io.log("Listing succeeded, but no ItemID found in response.")
+                    result.update({"ok": True, "ack": ack, "item_id": None})
+                return result
             else:
-                io.log("Listing succeeded, but no ItemID found in response.")
-                result.update({"ok": True, "ack": ack, "item_id": None})
-        else:
-            io.log(f"API Call failed with status: {ack}")
-            for error in tree.findall(f'{namespace}Errors'):
-                short_message_el = error.find(f'{namespace}ShortMessage')
-                long_message_el = error.find(f'{namespace}LongMessage')
-                short_message = short_message_el.text if short_message_el is not None else ""
-                long_message = long_message_el.text if long_message_el is not None else ""
-                io.log(f"Error: {short_message} - {long_message}")
-            result.update({"ok": False, "ack": ack})
-    except ET.ParseError:
-        io.log("Could not parse the XML response from eBay.")
+                # Parse errors and try to handle actionable ones
+                io.log(f"API Call failed with status: {ack}")
+                errors = []
+                for error in tree.findall(f'{namespace}Errors'):
+                    short_message_el = error.find(f'{namespace}ShortMessage')
+                    long_message_el = error.find(f'{namespace}LongMessage')
+                    short_message = short_message_el.text if short_message_el is not None else ""
+                    long_message = long_message_el.text if long_message_el is not None else ""
+                    io.log(f"Error: {short_message} - {long_message}")
+                    errors.append({"short": short_message, "long": long_message})
 
-    return result
+                # Try to detect field-specific errors like: "Type's value of \"...\" is too long. Enter a value of no more than 65 characters."
+                handled_any = False
+                for err in errors:
+                    long = err.get('long', '') or ''
+                    short = err.get('short', '') or ''
+
+                    # Best Offer vs AutoPay conflict
+                    if re.search(r"Best Offer.*immediate payment|immediate payment.*Best Offer", long + ' ' + short, re.IGNORECASE):
+                        choice = io.prompt_choice(
+                            "eBay reports a policy conflict: If this item sells by a Best Offer, you will not be able to require immediate payment.\nChoose how to proceed:",
+                            ["Disable Best Offer", "Disable Immediate Payment", "Cancel"]
+                        )
+                        if choice == "Disable Best Offer":
+                            best_offer_enabled = False
+                            io.log("User chose to disable Best Offer and retry.")
+                            handled_any = True
+                            break
+                        elif choice == "Disable Immediate Payment":
+                            auto_pay = False
+                            io.log("User chose to disable immediate payment (AutoPay) and retry.")
+                            handled_any = True
+                            break
+                        else:
+                            io.log("User cancelled while resolving policy conflict.")
+                            return {"ok": False, "ack": ack, "errors": errors}
+
+                    # Field length or value errors
+                    m = re.search(r"(?P<field>[\w ]+)'s value of \"(?P<value>.+?)\" is too (?P<issue>long|short)", long, re.IGNORECASE)
+                    if m:
+                        field = m.group('field').strip()
+                        current_value = m.group('value')
+                        # Try to extract a max length constraint if present
+                        max_m = re.search(r"Enter a value of no more than (?P<max>\d+) characters", long, re.IGNORECASE)
+                        max_len = int(max_m.group('max')) if max_m else None
+                        prompt = f"eBay error for field '{field}': {short} - {long}\nEnter a new value for '{field}':"
+                        default = current_value
+                        if max_len:
+                            prompt += f" (max {max_len} characters)"
+                        new_val = io.prompt_text(prompt, default=default).strip()
+                        if new_val == default and len(default) > (max_len or 1000):
+                            # If user didn't change and it's still too long, truncate to allowed length
+                            if max_len:
+                                new_val = default[:max_len]
+                                io.log(f"Automatically truncating value for '{field}' to {max_len} characters.")
+                        if not new_val:
+                            io.log(f"User provided empty value for '{field}'; aborting.")
+                            return {"ok": False, "ack": ack, "errors": errors}
+
+                        # Assign the corrected value into the right place
+                        fname_lower = field.lower()
+                        if fname_lower == 'title':
+                            title_variable = esc_xml(new_val)
+                        elif fname_lower in ('price', 'startprice'):
+                            try:
+                                price_variable = float(new_val)
+                            except Exception:
+                                io.log(f"Provided value for '{field}' is not a valid number: {new_val}")
+                                return {"ok": False, "ack": ack, "errors": errors}
+                        elif fname_lower in ('quantity',):
+                            try:
+                                ebayQuantity = int(new_val)
+                            except Exception:
+                                io.log(f"Provided value for '{field}' is not a valid integer: {new_val}")
+                                return {"ok": False, "ack": ack, "errors": errors}
+                        else:
+                            # Treat as an item specific: update existing key if case-insensitive match, else add new
+                            matched = None
+                            for k in list(itemSpecifics.keys()):
+                                if k.lower() == fname_lower or fname_lower in k.lower() or k.lower() in fname_lower:
+                                    matched = k
+                                    break
+                            if matched:
+                                itemSpecifics[matched] = new_val
+                            else:
+                                # Create/update the raw field name
+                                itemSpecifics[field] = new_val
+                        handled_any = True
+                        break
+
+                    # Generic 'too many characters' fallback: try to find a quoted value in the message
+                    q = re.search(r'"(?P<val>.{10,})" has too many characters|too many characters.*\"(?P<val2>.+?)\"', long, re.IGNORECASE)
+                    if q:
+                        current_value = q.group('val') if q.group('val') else q.group('val2')
+                        prompt = f"eBay reports a value that's too long: {short} - {long}\nPlease provide a corrected value (current shown):"
+                        new_val = io.prompt_text(prompt, default=current_value).strip()
+                        if not new_val:
+                            return {"ok": False, "ack": ack, "errors": errors}
+                        # Attempt to place into item specifics (best-effort)
+                        # If we can find which specific matches current_value, replace it
+                        replaced = False
+                        for k, v in list(itemSpecifics.items()):
+                            if str(v) == current_value:
+                                itemSpecifics[k] = new_val
+                                replaced = True
+                                break
+                        if not replaced:
+                            itemSpecifics[f'Corrected'] = new_val
+                        handled_any = True
+                        break
+
+                if not handled_any:
+                    io.log("Unrecognised eBay errors; not prompting for corrections.")
+                    return {"ok": False, "ack": ack, "errors": errors}
+                # If we handled an error, loop will retry building xml and resubmitting
+        except ET.ParseError:
+            io.log("Could not parse the XML response from eBay.")
+            return {"ok": False, "error": "parse_error"}
+
+    # If we exhausted attempts
+    io.log("Exceeded maximum retries attempting to correct eBay errors.")
+    return {"ok": False, "error": "max_retries"}

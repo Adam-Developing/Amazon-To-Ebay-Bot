@@ -28,6 +28,7 @@ const elements = {
     bulkPreview: document.getElementById("bulkPreview"),
     panelTabs: document.querySelectorAll(".panel-tab"),
     panelBodies: document.querySelectorAll(".panel-body"),
+    loadingSpinner: document.getElementById("loadingSpinner"),
 };
 let lastLogId = 0;
 let activePromptId = null;
@@ -43,7 +44,29 @@ const BULK_STATUS_TONES = {
     Cancelled: "warning",
 };
 
+// Helper to show/hide the small status spinner next to the status badge
+function showSpinner() {
+    if (!elements || !elements.loadingSpinner) return;
+    try {
+        elements.loadingSpinner.hidden = false;
+        elements.loadingSpinner.setAttribute('aria-hidden', 'false');
+    } catch (e) {
+        // ignore
+    }
+}
+
+function hideSpinner() {
+    if (!elements || !elements.loadingSpinner) return;
+    try {
+        elements.loadingSpinner.hidden = true;
+        elements.loadingSpinner.setAttribute('aria-hidden', 'true');
+    } catch (e) {
+        // ignore
+    }
+}
+
 async function postJson(url, payload) {
+    if (elements.loadingSpinner) showSpinner();
     const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -56,6 +79,8 @@ async function postJson(url, payload) {
         console.warn("Failed to parse JSON response", error);
         data = {};
     }
+    // Hide spinner for immediate response; long-running server work will be reflected via /api/state polling
+    if (elements.loadingSpinner) hideSpinner();
     return { response, data };
 }
 
@@ -81,6 +106,7 @@ function toggleTabPanel(targetId) {
 function showPrompt(prompt) {
     activePromptId = prompt.id;
     lastPromptType = prompt.type;
+    if (!elements.promptPanel) return;
     elements.promptLabel.textContent = prompt.prompt;
     if (prompt.type === "choice") {
         elements.promptSelect.innerHTML = "";
@@ -97,13 +123,25 @@ function showPrompt(prompt) {
         elements.promptInput.hidden = false;
         elements.promptSelect.hidden = true;
     }
-    elements.promptPanel.hidden = false;
+    // Make sure the panel is visible for layout: clear hidden attribute and set display
+    try {
+        elements.promptPanel.hidden = false;
+    } catch (e) {
+        // ignore if not supported
+    }
+    elements.promptPanel.style.display = 'flex';
 }
 
 function hidePrompt() {
     activePromptId = null;
     lastPromptType = null;
-    elements.promptPanel.hidden = true;
+    if (!elements.promptPanel) return;
+    try {
+        elements.promptPanel.hidden = true;
+    } catch (e) {
+        // ignore if not supported
+    }
+    elements.promptPanel.style.display = 'none';
 }
 
 hidePrompt();
@@ -114,6 +152,65 @@ async function submitPrompt(value) {
     }
     await postJson(`/api/prompts/${activePromptId}`, { value });
     hidePrompt();
+}
+
+// Helper: clean up bulk UI after cancel
+function clearBulkItemsUI() {
+    if (elements.bulkItems) {
+        elements.bulkItems.innerHTML = "";
+    }
+    if (elements.bulkMeta) {
+        elements.bulkMeta.textContent = "Paste bulk text to preview items.";
+    }
+    if (elements.bulkPreview) {
+        elements.bulkPreview.hidden = true;
+    }
+    if (elements.bulkText) {
+        elements.bulkText.value = "";
+    }
+    if (elements.bulkPauseBtn) {
+        elements.bulkPauseBtn.hidden = true;
+    }
+    if (elements.bulkCancelBtn) {
+        elements.bulkCancelBtn.hidden = true;
+    }
+    if (elements.bulkProcessBtn) {
+        elements.bulkProcessBtn.disabled = false;
+    }
+}
+
+async function cancelPublishingAndCleanup() {
+    // If the server is waiting on a prompt, resolve it first so it doesn't hang
+    try {
+        if (activePromptId !== null) {
+            // send null as cancellation to the active prompt
+            await postJson(`/api/prompts/${activePromptId}`, { value: null });
+        }
+    } catch (e) {
+        // ignore prompt resolution errors
+    }
+
+    // Hide any visible prompt panel on the client
+    try {
+        hidePrompt();
+    } catch (e) {
+        // ignore
+    }
+
+    // Call server cancel endpoint for bulk publishing
+    const { response, data } = await postJson("/api/bulk/cancel");
+    if (!response.ok) {
+        return { ok: false, data };
+    }
+    // UI cleanup
+    clearBulkItemsUI();
+    // Refresh state to sync UI with server
+    try {
+        await refreshState();
+    } catch (e) {
+        // ignore
+    }
+    return { ok: true, data };
 }
 
 async function handlePromptEnter(event, getValue) {
@@ -168,6 +265,13 @@ async function refreshState() {
         elements.statusMessage.textContent = statusMessage;
     }
 
+    // Show spinner while server-side processing is true
+    if (data.processing) {
+        showSpinner();
+    } else {
+        hideSpinner();
+    }
+
     const bulk = data.bulk || {};
     const running = Boolean(bulk.running);
     elements.bulkProcessBtn.disabled = running;
@@ -185,6 +289,8 @@ async function refreshState() {
     if (elements.bulkItems) {
         renderBulkItems(bulk.items || []);
     }
+
+    return data;
 }
 
 async function refreshOpenUrls() {
@@ -221,6 +327,7 @@ elements.jsonFile.addEventListener("change", async (event) => {
 });
 
 elements.authBtn.addEventListener("click", async () => {
+    try { showSpinner(); } catch (e) {}
     const { response, data } = await postJson("/api/auth");
     if (!response.ok) {
         alert(data.error || "Failed to start auth.");
@@ -228,6 +335,7 @@ elements.authBtn.addEventListener("click", async () => {
 });
 
 elements.logoutBtn.addEventListener("click", async () => {
+    try { showSpinner(); } catch (e) {}
     const { response, data } = await postJson("/api/logout");
     if (!response.ok) {
         alert(data.error || "Failed to logout.");
@@ -235,6 +343,7 @@ elements.logoutBtn.addEventListener("click", async () => {
 });
 
 elements.scrapeBtn.addEventListener("click", async () => {
+    try { showSpinner(); } catch (e) {}
     const payload = {
         url: elements.amazonUrl.value,
         quantity: elements.quantity.value,
@@ -248,6 +357,7 @@ elements.scrapeBtn.addEventListener("click", async () => {
 });
 
 elements.listBtn.addEventListener("click", async () => {
+    try { showSpinner(); } catch (e) {}
     const { response, data } = await postJson("/api/list");
     if (!response.ok) {
         alert(data.error || "Failed to list item.");
@@ -255,6 +365,7 @@ elements.listBtn.addEventListener("click", async () => {
 });
 
 elements.bulkProcessBtn.addEventListener("click", async () => {
+    try { showSpinner(); } catch (e) {}
     const { response, data } = await postJson("/api/bulk/process", { text: elements.bulkText.value });
     if (!response.ok) {
         alert(data.error || "Failed to start bulk processing.");
@@ -262,6 +373,7 @@ elements.bulkProcessBtn.addEventListener("click", async () => {
 });
 
 elements.bulkPauseBtn.addEventListener("click", async () => {
+    try { showSpinner(); } catch (e) {}
     const { response, data } = await postJson("/api/bulk/pause");
     if (!response.ok) {
         alert(data.error || "Failed to toggle bulk pause.");
@@ -270,21 +382,30 @@ elements.bulkPauseBtn.addEventListener("click", async () => {
     }
 });
 
+// Updated cancel handler: cancel publishing, clean UI
 elements.bulkCancelBtn.addEventListener("click", async () => {
-    const { response, data } = await postJson("/api/bulk/cancel");
-    if (!response.ok) {
-        alert(data.error || "Failed to cancel bulk.");
+    try { showSpinner(); } catch (e) {}
+    const result = await cancelPublishingAndCleanup();
+    if (!result.ok) {
+        alert(result.data.error || "Failed to cancel bulk.");
+    }
+});
+
+// When user clicks Cancel on the prompt, cancel publishing and cleanup
+elements.promptCancel.addEventListener("click", async () => {
+    try { showSpinner(); } catch (e) {}
+    const result = await cancelPublishingAndCleanup();
+    if (!result.ok) {
+        alert(result.data.error || "Failed to cancel bulk.");
     }
 });
 
 elements.promptOk.addEventListener("click", async () => {
+    try { showSpinner(); } catch (e) {}
     const value = lastPromptType === "choice" ? elements.promptSelect.value : elements.promptInput.value;
     await submitPrompt(value);
 });
 
-elements.promptCancel.addEventListener("click", async () => {
-    await submitPrompt(null);
-});
 
 elements.promptInput.addEventListener("keydown", (event) =>
     handlePromptEnter(event, () => elements.promptInput.value),
@@ -394,5 +515,19 @@ scheduleBulkPreview();
 
 setInterval(refreshLogs, 1500);
 setInterval(refreshPrompt, 1500);
-setInterval(refreshState, 2000);
 setInterval(refreshOpenUrls, 2000);
+
+// Adaptive polling: poll faster while server-side processing/bulk is running so item statuses update more responsively
+(async function startAdaptiveStatePoll() {
+    async function poll() {
+        try {
+            const data = await refreshState();
+            const shouldPollFast = data && (data.processing || (data.bulk && data.bulk.running));
+            setTimeout(poll, shouldPollFast ? 800 : 2000);
+        } catch (e) {
+            // On error, wait a bit and retry
+            setTimeout(poll, 2000);
+        }
+    }
+    poll();
+})();

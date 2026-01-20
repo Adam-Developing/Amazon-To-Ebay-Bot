@@ -1,0 +1,17 @@
+import json
+from bulk_parser import parse_bulk_items
+
+text = '''9
+quantity: 4
+note:Attic next to cornflex Iceland Bag 1 Dated 16/01/2026
+note: X002F8MT1B
+Size Name: for iphone 16 pro | Colour Name: Clear
+ivencase 3 in 1 Clear Case for iPhone 16 Pro 6.3-Inch with 2 Pack Tempered Glass Screen Protector, Slim Soft TPU Silicone Non-Yellowing Shockproof Anti-Scratch Phone Bumper Cover - Clear
+https://www.amazon.co.uk/dp/B0FVF4P8CR?ref=ppx_yo2ov_dt_b_fed_asin_title&th=1
+'''
+
+items = parse_bulk_items(text)
+print(json.dumps(items, indent=2))
+for it in items:
+    print('NOTE REPR:', repr(it['note']))
+    print('NOTE RAW:', it['note'])

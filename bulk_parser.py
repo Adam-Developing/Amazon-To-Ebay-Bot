@@ -60,7 +60,8 @@ def parse_bulk_items(text: str) -> List[Dict]:
     for block in blocks:
         url = ''
         qty = None
-        local_note = ''
+        # collect multiple local notes, then join later
+        local_notes: List[str] = []
         custom_specifics: Dict[str, str] = {}
 
         # 1. Scan block for URL and properties
@@ -78,10 +79,12 @@ def parse_bulk_items(text: str) -> List[Dict]:
                 qty = int(m_qty.group(1))
                 continue
 
-            # Check Explicit Note (inside the block)
+            # Check Explicit Note (inside the block) - collect all note lines
             m_note = _note_re.match(ln)
             if m_note:
-                local_note = m_note.group(1).strip()
+                note_val = m_note.group(1).strip()
+                if note_val:
+                    local_notes.append(note_val)
                 continue
 
             # Check Specifics (Key: Value)
@@ -100,8 +103,21 @@ def parse_bulk_items(text: str) -> List[Dict]:
             continue
 
         # 3. It is an item (has URL). Apply logic.
-        # Specific local note takes priority over the global header note
-        final_note = local_note if local_note else current_global_note
+        # Merge local notes; if none, use the global header note. If both exist, combine them.
+        final_note_parts: List[str] = []
+        if current_global_note:
+            final_note_parts.append(current_global_note)
+        if local_notes:
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_local = []
+            for n in local_notes:
+                if n not in seen:
+                    seen.add(n)
+                    unique_local.append(n)
+            final_note_parts.extend(unique_local)
+
+        final_note = ' | '.join(final_note_parts).strip()
 
         items.append({
             "url": url,

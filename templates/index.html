@@ -57,6 +57,8 @@ Size: L | Colour: Red
             <div class="status-header">
                 <span class="status-title">Status</span>
                 <span id="statusBadge" class="status-pill" data-tone="idle">Idle</span>
+                <!-- Spinner appears while the server reports processing or when an action is initiated -->
+                <span id="loadingSpinner" class="status-spinner" hidden aria-hidden="true" title="Working"></span>
             </div>
             <div id="statusMessage" class="status-message">Ready to start.</div>
         </div>
