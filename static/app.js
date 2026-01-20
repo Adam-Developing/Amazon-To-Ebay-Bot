@@ -110,6 +110,14 @@ async function submitPrompt(value) {
     hidePrompt();
 }
 
+async function handlePromptEnter(event, getValue) {
+    if (event.key !== "Enter") {
+        return;
+    }
+    event.preventDefault();
+    await submitPrompt(getValue());
+}
+
 async function refreshPrompt() {
     const response = await fetch("/api/prompts");
     const data = await response.json();
@@ -272,19 +280,13 @@ elements.promptCancel.addEventListener("click", async () => {
     await submitPrompt(null);
 });
 
-elements.promptInput.addEventListener("keydown", async (event) => {
-    if (event.key === "Enter") {
-        event.preventDefault();
-        await submitPrompt(elements.promptInput.value);
-    }
-});
+elements.promptInput.addEventListener("keydown", (event) =>
+    handlePromptEnter(event, () => elements.promptInput.value),
+);
 
-elements.promptSelect.addEventListener("keydown", async (event) => {
-    if (event.key === "Enter") {
-        event.preventDefault();
-        await submitPrompt(elements.promptSelect.value);
-    }
-});
+elements.promptSelect.addEventListener("keydown", (event) =>
+    handlePromptEnter(event, () => elements.promptSelect.value),
+);
 
 elements.toggleLogBtn.addEventListener("click", () => {
     const isHidden = elements.logView.hidden;
@@ -313,7 +315,7 @@ function renderBulkItems(items) {
 
         const title = document.createElement("span");
         title.className = "bulk-item-title";
-        title.textContent = `Item ${item.index || ""}`.trim();
+        title.textContent = `Item ${item.index || "?"}`.trim();
 
         const status = document.createElement("span");
         status.className = "status-pill bulk-status";
@@ -362,12 +364,20 @@ function scheduleBulkPreview() {
         return;
     }
     if (bulkPreviewTimeout) {
-        window.clearTimeout(bulkPreviewTimeout);
+        clearTimeout(bulkPreviewTimeout);
     }
-    bulkPreviewTimeout = window.setTimeout(async () => {
-        const { response, data } = await postJson("/api/bulk/preview", { text: elements.bulkText.value });
-        if (response.ok) {
-            renderBulkItems(data.items || []);
+    bulkPreviewTimeout = setTimeout(async () => {
+        try {
+            const result = await postJson("/api/bulk/preview", { text: elements.bulkText.value });
+            if (result.response.ok) {
+                renderBulkItems(result.data.items || []);
+            } else if (elements.bulkMeta) {
+                elements.bulkMeta.textContent = result.data.error || "Unable to preview bulk items.";
+            }
+        } catch (error) {
+            if (elements.bulkMeta) {
+                elements.bulkMeta.textContent = "Unable to preview bulk items.";
+            }
         }
     }, 400);
 }

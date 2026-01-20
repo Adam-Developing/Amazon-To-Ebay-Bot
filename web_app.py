@@ -124,11 +124,15 @@ def _set_bulk_items(items: List[Dict[str, Any]]) -> None:
 
 
 def _update_bulk_item(index: int, status: str, message: str = "") -> None:
+    updated = False
     with STATE_LOCK:
         items = STATE["bulk"].get("items", [])
         if 0 <= index < len(items):
             items[index]["status"] = status
             items[index]["message"] = message
+            updated = True
+    if not updated:
+        _append_log(f"Bulk item index {index} is out of range.")
 
 
 def _append_log(msg: str) -> None:
@@ -489,7 +493,7 @@ def api_bulk_process():
     _set_status("Working", f"Bulk processing started ({len(items)} items).", "working")
 
     def work():
-        _update_bulk_state(running=True, paused=False, cancelled=False, processed=0, total=len(items))
+        _update_bulk_state(running=True, paused=False, cancelled=False, processed=0, total=len(prepared_items))
         bulk_pause_event.set()
         bulk_cancel_event.clear()
         try:
@@ -500,18 +504,19 @@ def api_bulk_process():
                 return
             os.makedirs("bulk_products", exist_ok=True)
             processed_count = 0
-            total_items = len(items)
-            for idx, item in enumerate(items, start=1):
+            total_items = len(prepared_items)
+            for index, item in enumerate(prepared_items):
+                display_index = item.get("index", index + 1)
                 bulk_pause_event.wait()
                 if bulk_cancel_event.is_set():
                     WEB_IO.log("Bulk process cancelled.")
-                    _update_bulk_item(idx - 1, "Cancelled", "Cancelled before processing.")
-                    for remaining in range(idx, total_items):
-                        _update_bulk_item(remaining, "Cancelled", "Cancelled before processing.")
+                    _update_bulk_item(index, "Cancelled", "Cancelled before processing.")
+                    for remaining_index in range(index + 1, total_items):
+                        _update_bulk_item(remaining_index, "Cancelled", "Cancelled before processing.")
                     break
-                _set_status("Working", f"Processing item {idx} of {total_items}.", "working")
-                _update_bulk_item(idx - 1, "Scraping", "Scraping Amazon listing.")
-                WEB_IO.log(f"=== Processing Item {idx}/{total_items} ===")
+                _set_status("Working", f"Processing item {display_index} of {total_items}.", "working")
+                _update_bulk_item(index, "Scraping", "Scraping Amazon listing.")
+                WEB_IO.log(f"=== Processing Item {display_index}/{total_items} ===")
                 product = scrape_amazon(
                     item.get("url", ""),
                     note=item.get("note", ""),
@@ -520,22 +525,26 @@ def api_bulk_process():
                     io=WEB_IO,
                 )
                 if not product:
-                    WEB_IO.log(f"Skipping item {idx} due to scraping failure.")
-                    _update_bulk_item(idx - 1, "Failed", "Scrape failed.")
+                    WEB_IO.log(f"Skipping item {display_index} due to scraping failure.")
+                    _update_bulk_item(index, "Failed", "Scrape failed.")
                     continue
-                with open(os.path.join("bulk_products", f"product_{idx}.json"), "w", encoding="utf-8") as handle:
+                with open(
+                    os.path.join("bulk_products", f"product_{display_index}.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as handle:
                     json.dump(product, handle, indent=2)
-                _update_bulk_item(idx - 1, "Listing", "Listing on eBay.")
+                _update_bulk_item(index, "Listing", "Listing on eBay.")
                 result = list_on_ebay(product, WEB_IO)
                 if result.get("ok"):
                     processed_count += 1
                     _update_bulk_item(
-                        idx - 1,
+                        index,
                         "Listed",
                         f"Listed successfully (Item ID {result.get('item_id')}).",
                     )
                 else:
-                    _update_bulk_item(idx - 1, "Failed", "Listing failed.")
+                    _update_bulk_item(index, "Failed", "Listing failed.")
                 _update_bulk_state(processed=processed_count)
             if not bulk_cancel_event.is_set():
                 WEB_IO.log(f"Bulk processing finished. Processed {processed_count} items.")
