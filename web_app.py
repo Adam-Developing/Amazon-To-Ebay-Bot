@@ -26,6 +26,7 @@ app = Flask(__name__)
 MAX_LOG_ENTRIES = 1000
 PROMPT_TIMEOUT_SECONDS = 600
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+UPDATE_WAIT_SECONDS = 25
 
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 EPHEMERAL_SECRET = False
@@ -71,20 +72,33 @@ OPEN_URLS: List[str] = []
 bulk_pause_event = threading.Event()
 bulk_cancel_event = threading.Event()
 
+UPDATE_COUNTER = 0
+UPDATE_CONDITION = threading.Condition()
+
+
+def _notify_update() -> None:
+    global UPDATE_COUNTER
+    with UPDATE_CONDITION:
+        UPDATE_COUNTER += 1
+        UPDATE_CONDITION.notify_all()
+
 
 def _set_processing(value: bool) -> None:
     with STATE_LOCK:
         STATE["processing"] = value
+    _notify_update()
 
 
 def _set_status(label: str, message: str, tone: str = "idle") -> None:
     with STATE_LOCK:
         STATE["status"] = {"label": label, "message": message, "tone": tone}
+    _notify_update()
 
 
 def _set_product(product: Optional[Dict[str, Any]]) -> None:
     with STATE_LOCK:
         STATE["product"] = product
+    _notify_update()
 
 
 def _is_processing() -> bool:
@@ -100,6 +114,7 @@ def _is_bulk_running() -> bool:
 def _update_bulk_state(**updates: Any) -> None:
     with STATE_LOCK:
         STATE["bulk"].update(updates)
+    _notify_update()
 
 
 def _build_bulk_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -152,11 +167,13 @@ def _append_log(msg: str) -> None:
         LOG_ENTRIES.append({"id": LOG_COUNTER, "message": entry})
         if len(LOG_ENTRIES) > MAX_LOG_ENTRIES:
             LOG_ENTRIES[: len(LOG_ENTRIES) - MAX_LOG_ENTRIES] = []
+    _notify_update()
 
 
 def _queue_open_url(url: str) -> None:
     with OPEN_URL_LOCK:
         OPEN_URLS.append(url)
+    _notify_update()
 
 
 class WebIOBridge(IOBridge):
@@ -194,10 +211,12 @@ def _await_prompt(prompt_type: str, prompt: str, default: str, options: List[str
             "options": options,
         }
         PROMPT_EVENTS[rid] = {"event": event, "value": None, "default": default}
+    _notify_update()
     resolved = event.wait(PROMPT_TIMEOUT_SECONDS)
     with PROMPT_LOCK:
         entry = PROMPT_EVENTS.pop(rid, None)
         ACTIVE_PROMPT = None
+    _notify_update()
     if not resolved:
         _append_log("Prompt timed out; continuing with default value.")
         return default
@@ -216,6 +235,7 @@ def _resolve_prompt(rid: int, value: Optional[str]) -> bool:
         entry["value"] = value
         entry["event"].set()
         ACTIVE_PROMPT = None
+    _notify_update()
     return True
 
 
@@ -317,6 +337,20 @@ def api_open_urls():
         urls = list(OPEN_URLS)
         OPEN_URLS.clear()
     return jsonify({"urls": urls})
+
+
+@app.get("/api/updates")
+def api_updates():
+    since = request.args.get("since")
+    try:
+        since_value = int(since) if since is not None else 0
+    except (TypeError, ValueError):
+        since_value = 0
+    with UPDATE_CONDITION:
+        if UPDATE_COUNTER <= since_value:
+            UPDATE_CONDITION.wait(timeout=UPDATE_WAIT_SECONDS)
+        current = UPDATE_COUNTER
+    return jsonify({"update_id": current})
 
 
 @app.post("/api/load-json")

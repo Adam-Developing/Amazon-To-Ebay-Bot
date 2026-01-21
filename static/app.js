@@ -31,9 +31,11 @@ const elements = {
     loadingSpinner: document.getElementById("loadingSpinner"),
 };
 let lastLogId = 0;
+let lastUpdateId = 0;
 let activePromptId = null;
 let lastPromptType = null;
 let bulkPreviewTimeout = null;
+let updatesAbortController = null;
 
 const BULK_STATUS_TONES = {
     Ready: "idle",
@@ -256,6 +258,9 @@ async function handlePromptEnter(event, getValue) {
 
 async function refreshPrompt() {
     const response = await fetch("/api/prompts");
+    if (!response.ok) {
+        return;
+    }
     const data = await response.json();
     if (data.prompt) {
         if (activePromptId !== data.prompt.id) {
@@ -268,6 +273,9 @@ async function refreshPrompt() {
 
 async function refreshLogs() {
     const response = await fetch(`/api/logs?since=${lastLogId}`);
+    if (!response.ok) {
+        return;
+    }
     const data = await response.json();
     data.entries.forEach((entry) => {
         elements.logView.textContent += `${entry.message}\n`;
@@ -280,6 +288,9 @@ async function refreshLogs() {
 
 async function refreshState() {
     const response = await fetch("/api/state");
+    if (!response.ok) {
+        throw new Error("Failed to fetch state");
+    }
     const data = await response.json();
     elements.listBtn.disabled = !data.product_loaded || data.processing;
     elements.scrapeBtn.disabled = data.processing;
@@ -328,11 +339,44 @@ async function refreshState() {
 
 async function refreshOpenUrls() {
     const response = await fetch("/api/open-urls");
+    if (!response.ok) {
+        return;
+    }
     const data = await response.json();
     const urls = data.urls || [];
     urls.forEach((url) => {
         openExternal(url);
     });
+}
+
+async function waitForUpdates() {
+    if (updatesAbortController) {
+        updatesAbortController.abort();
+    }
+    updatesAbortController = new AbortController();
+    const { signal } = updatesAbortController;
+    try {
+        const response = await fetch(`/api/updates?since=${lastUpdateId}`, { signal });
+        const data = await response.json();
+        if (typeof data.update_id === "number") {
+            lastUpdateId = data.update_id;
+        }
+    } catch (error) {
+        if (error && error.name === "AbortError") {
+            return;
+        }
+    }
+}
+
+async function refreshAll() {
+    await Promise.allSettled([refreshState(), refreshLogs(), refreshPrompt(), refreshOpenUrls()]);
+}
+
+async function startUpdatesLoop() {
+    for (;;) {
+        await waitForUpdates();
+        await refreshAll();
+    }
 }
 
 elements.panelTabs.forEach((tab) => {
@@ -554,21 +598,5 @@ elements.bulkText.addEventListener("input", scheduleBulkPreview);
 
 scheduleBulkPreview();
 
-setInterval(refreshLogs, 1500);
-setInterval(refreshPrompt, 1500);
-setInterval(refreshOpenUrls, 2000);
-
-// Adaptive polling: poll faster while server-side processing/bulk is running so item statuses update more responsively
-(async function startAdaptiveStatePoll() {
-    async function poll() {
-        try {
-            const data = await refreshState();
-            const shouldPollFast = data && (data.processing || (data.bulk && data.bulk.running));
-            setTimeout(poll, shouldPollFast ? 800 : 2000);
-        } catch (e) {
-            // On error, wait a bit and retry
-            setTimeout(poll, 2000);
-        }
-    }
-    poll();
-})();
+refreshAll().catch(() => {});
+startUpdatesLoop();
