@@ -357,6 +357,9 @@ async function waitForUpdates() {
     const { signal } = updatesAbortController;
     try {
         const response = await fetch(`/api/updates?since=${lastUpdateId}`, { signal });
+        if (!response.ok) {
+            return;
+        }
         const data = await response.json();
         if (typeof data.update_id === "number") {
             lastUpdateId = data.update_id;
@@ -374,8 +377,12 @@ async function refreshAll() {
 
 async function startUpdatesLoop() {
     for (;;) {
-        await waitForUpdates();
-        await refreshAll();
+        try {
+            await waitForUpdates();
+            await refreshAll();
+        } catch (error) {
+            // ignore and retry
+        }
     }
 }
 
