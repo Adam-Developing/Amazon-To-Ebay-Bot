@@ -364,7 +364,7 @@ async function waitForUpdates() {
             throw new Error("Update request failed");
         }
         const data = await response.json();
-        if (typeof data.update_id === "number") {
+        if (Number.isInteger(data.update_id) && data.update_id >= 0) {
             lastUpdateId = data.update_id;
         }
     } catch (error) {
@@ -386,7 +386,7 @@ async function startUpdatesLoop() {
             updateRetryDelay = 0;
             await refreshAll();
         } catch (error) {
-            updateRetryDelay = updateRetryDelay
+            updateRetryDelay = updateRetryDelay > 0
                 ? Math.min(updateRetryDelay * 2, MAX_RETRY_DELAY)
                 : INITIAL_RETRY_DELAY;
             await new Promise((resolve) => setTimeout(resolve, updateRetryDelay));

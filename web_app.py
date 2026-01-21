@@ -350,6 +350,8 @@ def api_updates():
     if since_value < 0:
         return jsonify({"error": "Invalid since value."}), 400
     with UPDATE_CONDITION:
+        if since_value > UPDATE_COUNTER:
+            since_value = UPDATE_COUNTER
         if UPDATE_COUNTER <= since_value:
             UPDATE_CONDITION.wait(timeout=UPDATE_WAIT_SECONDS)
         current = UPDATE_COUNTER
