@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 
 from dotenv import load_dotenv
 from ui_bridge import IOBridge  # added
+from gemini_helper import suggest_item_specifics_with_gemini
 
 load_dotenv()
 # ---- eBay aspect key mapping (edit here) ------------------------------------
@@ -235,6 +236,17 @@ def get_item_specifics(token, category_tree_id, category_id, product_data, io: I
             return aspect_name in item_specifics and str(item_specifics[aspect_name]).strip() != ""
 
         # ---------- 6) Validate against taxonomy & prompt as needed ----------
+        # First, attempt AI suggestions for missing REQUIRED aspects only
+        taxonomy_aspects = taxonomy.get('aspects', []) if taxonomy else []
+        required_aspects = [a for a in taxonomy_aspects if (a.get('aspectConstraint', {}) or {}).get('aspectRequired', False)]
+        ai_suggestions = suggest_item_specifics_with_gemini(product_data, required_aspects)
+        if ai_suggestions:
+            # apply only for required aspect names
+            required_names = {a.get('localizedAspectName') for a in required_aspects}
+            for k, v in ai_suggestions.items():
+                if k in required_names and (k not in item_specifics or str(item_specifics.get(k, '')).strip() == ""):
+                    item_specifics[k] = v
+
         for aspect in taxonomy.get('aspects', []):
             name = aspect['localizedAspectName']   # exact eBay casing
             mode = aspect.get('aspectConstraint', {}).get('aspectMode')
@@ -246,6 +258,12 @@ def get_item_specifics(token, category_tree_id, category_id, product_data, io: I
                 # If selection-only, validate our value against allowed options
                 if mode == 'SELECTION_ONLY' and options:
                     if not any(str(val).lower() == (str(opt) or "").lower() for opt in options):
+                        # Try AI suggestion override if available (only if required)
+                        if required:
+                            ai_val = ai_suggestions.get(name)
+                            if ai_val and any(str(ai_val).lower() == (str(opt) or "").lower() for opt in options):
+                                item_specifics[name] = ai_val
+                                continue
                         io.log(f"'{name}' must be selected from allowed values.")
                         choice = io.prompt_choice(f"Select a value for '{name}'", options)
                         if choice:
@@ -255,13 +273,22 @@ def get_item_specifics(token, category_tree_id, category_id, product_data, io: I
             # Missing
             if required:
                 if mode == 'SELECTION_ONLY' and options:
-                    choice = io.prompt_choice(f"Select a value for required aspect '{name}'", options)
-                    if choice:
-                        item_specifics[name] = choice
+                    # Prefer AI suggestion
+                    ai_val = ai_suggestions.get(name)
+                    if ai_val and any(str(ai_val).lower() == (str(opt) or "").lower() for opt in options):
+                        item_specifics[name] = ai_val
+                    else:
+                        choice = io.prompt_choice(f"Select a value for required aspect '{name}'", options)
+                        if choice:
+                            item_specifics[name] = choice
                 else:
-                    val = io.prompt_text(f"Please enter a value for '{name}':", default="").strip()
-                    if val:
-                        item_specifics[name] = val
+                    ai_val = ai_suggestions.get(name)
+                    if ai_val:
+                        item_specifics[name] = ai_val
+                    else:
+                        val = io.prompt_text(f"Please enter a value for '{name}':", default="").strip()
+                        if val:
+                            item_specifics[name] = val
 
         io.log("--- Finished Populating Item Specifics ---")
         return item_specifics
@@ -391,4 +418,3 @@ def find_minimum_price(target_total):
         # Safety break to prevent potential infinite loops
         if current_price > target_total:
             raise RuntimeError("Could not find a suitable price.")
-

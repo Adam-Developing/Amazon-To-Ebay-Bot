@@ -2,3 +2,4 @@ requests
 beautifulsoup4
 python-dotenv
 Flask==3.1.2
+google-genai>=0.2.0
