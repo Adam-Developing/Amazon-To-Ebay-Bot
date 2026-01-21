@@ -345,7 +345,7 @@ def api_updates():
     since = request.args.get("since")
     try:
         since_value = int(since) if since is not None else 0
-    except (TypeError, ValueError):
+    except ValueError:
         since_value = 0
     if since_value < 0:
         return jsonify({"error": "Invalid since value."}), 400

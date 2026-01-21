@@ -46,6 +46,8 @@ const BULK_STATUS_TONES = {
     Failed: "error",
     Cancelled: "warning",
 };
+const INITIAL_RETRY_DELAY = 500;
+const MAX_RETRY_DELAY = 8000;
 
 // Helper to show/hide the small status spinner next to the status badge
 function showSpinner() {
@@ -378,13 +380,15 @@ async function refreshAll() {
 }
 
 async function startUpdatesLoop() {
-    for (;;) {
+    while (true) {
         try {
             await waitForUpdates();
             updateRetryDelay = 0;
             await refreshAll();
         } catch (error) {
-            updateRetryDelay = updateRetryDelay ? Math.min(updateRetryDelay * 2, 8000) : 500;
+            updateRetryDelay = updateRetryDelay
+                ? Math.min(updateRetryDelay * 2, MAX_RETRY_DELAY)
+                : INITIAL_RETRY_DELAY;
             await new Promise((resolve) => setTimeout(resolve, updateRetryDelay));
         }
     }
