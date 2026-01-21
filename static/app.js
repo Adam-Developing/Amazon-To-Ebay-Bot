@@ -32,6 +32,7 @@ const elements = {
 };
 let lastLogId = 0;
 let lastUpdateId = 0;
+let updateRetryDelay = 0;
 let activePromptId = null;
 let lastPromptType = null;
 let bulkPreviewTimeout = null;
@@ -289,7 +290,7 @@ async function refreshLogs() {
 async function refreshState() {
     const response = await fetch("/api/state");
     if (!response.ok) {
-        throw new Error("Failed to fetch state");
+        return;
     }
     const data = await response.json();
     elements.listBtn.disabled = !data.product_loaded || data.processing;
@@ -358,7 +359,7 @@ async function waitForUpdates() {
     try {
         const response = await fetch(`/api/updates?since=${lastUpdateId}`, { signal });
         if (!response.ok) {
-            return;
+            throw new Error("Update request failed");
         }
         const data = await response.json();
         if (typeof data.update_id === "number") {
@@ -379,9 +380,11 @@ async function startUpdatesLoop() {
     for (;;) {
         try {
             await waitForUpdates();
+            updateRetryDelay = 0;
             await refreshAll();
         } catch (error) {
-            // ignore and retry
+            updateRetryDelay = updateRetryDelay ? Math.min(updateRetryDelay * 2, 8000) : 500;
+            await new Promise((resolve) => setTimeout(resolve, updateRetryDelay));
         }
     }
 }

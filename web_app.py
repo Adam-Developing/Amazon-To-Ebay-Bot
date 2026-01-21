@@ -347,6 +347,8 @@ def api_updates():
         since_value = int(since) if since is not None else 0
     except (TypeError, ValueError):
         since_value = 0
+    if since_value < 0:
+        return jsonify({"error": "Invalid since value."}), 400
     with UPDATE_CONDITION:
         if UPDATE_COUNTER <= since_value:
             UPDATE_CONDITION.wait(timeout=UPDATE_WAIT_SECONDS)
