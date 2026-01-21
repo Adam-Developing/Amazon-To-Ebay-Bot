@@ -369,6 +369,7 @@ async function waitForUpdates() {
         if (error && error.name === "AbortError") {
             return;
         }
+        throw error;
     }
 }
 
