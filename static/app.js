@@ -366,7 +366,9 @@ async function waitForUpdates() {
         const data = await response.json();
         if (Number.isInteger(data.update_id) && data.update_id >= 0) {
             lastUpdateId = data.update_id;
+            return;
         }
+        throw new Error("Invalid update_id");
     } catch (error) {
         if (error && error.name === "AbortError") {
             return;
