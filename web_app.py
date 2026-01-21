@@ -73,7 +73,8 @@ bulk_pause_event = threading.Event()
 bulk_cancel_event = threading.Event()
 
 UPDATE_COUNTER = 0
-UPDATE_CONDITION = threading.Condition()
+UPDATE_LOCK = threading.Lock()
+UPDATE_CONDITION = threading.Condition(UPDATE_LOCK)
 
 
 def _notify_update() -> None:
