@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, jsonify, render_template, request
+from flask import (
+    Flask,
+    g,
+    has_app_context,
+    has_request_context,
+    jsonify,
+    render_template,
+    request,
+    session,
+)
 
 from amazon import scrape_amazon
 from bulk_parser import parse_bulk_items
@@ -36,85 +46,128 @@ if not FLASK_SECRET_KEY:
 
 app.secret_key = FLASK_SECRET_KEY
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
-STATE_LOCK = threading.Lock()
-LOG_LOCK = threading.Lock()
-PROMPT_LOCK = threading.Lock()
-OPEN_URL_LOCK = threading.Lock()
+USER_CONTEXTS: Dict[str, Dict[str, Any]] = {}
+USER_CONTEXTS_LOCK = threading.Lock()
 
-STATE: Dict[str, Any] = {
-    "product": None,
-    "processing": False,
-    "status": {
-        "label": "Idle",
-        "message": "Ready to start.",
-        "tone": "idle",
-    },
-    "bulk": {
-        "running": False,
-        "paused": False,
-        "cancelled": False,
-        "processed": 0,
-        "total": 0,
-        "items": [],
-    },
-}
 
-LOG_ENTRIES: List[Dict[str, Any]] = []
-LOG_COUNTER = 0
+def _new_state() -> Dict[str, Any]:
+    return {
+        "product": None,
+        "processing": False,
+        "status": {
+            "label": "Idle",
+            "message": "Ready to start.",
+            "tone": "idle",
+        },
+        "bulk": {
+            "running": False,
+            "paused": False,
+            "cancelled": False,
+            "processed": 0,
+            "total": 0,
+            "items": [],
+        },
+    }
 
-PROMPT_EVENTS: Dict[int, Dict[str, Any]] = {}
-ACTIVE_PROMPT: Optional[Dict[str, Any]] = None
-PROMPT_COUNTER = 0
 
-OPEN_URLS: List[str] = []
+def _create_user_context() -> Dict[str, Any]:
+    update_lock = threading.Lock()
+    return {
+        "state": _new_state(),
+        "state_lock": threading.Lock(),
+        "log_entries": [],
+        "log_counter": 0,
+        "log_lock": threading.Lock(),
+        "prompt_events": {},
+        "active_prompt": None,
+        "prompt_counter": 0,
+        "prompt_lock": threading.Lock(),
+        "open_urls": [],
+        "open_url_lock": threading.Lock(),
+        "bulk_pause_event": threading.Event(),
+        "bulk_cancel_event": threading.Event(),
+        "update_counter": 0,
+        "update_lock": update_lock,
+        "update_condition": threading.Condition(update_lock),
+    }
 
-bulk_pause_event = threading.Event()
-bulk_cancel_event = threading.Event()
 
-UPDATE_COUNTER = 0
-UPDATE_LOCK = threading.Lock()
-UPDATE_CONDITION = threading.Condition(UPDATE_LOCK)
+def _get_user_id() -> str:
+    user_id = session.get("user_id")
+    if not user_id:
+        user_id = secrets.token_urlsafe(16)
+        session["user_id"] = user_id
+    return user_id
+
+
+def _current_user_id() -> str:
+    if has_request_context() or has_app_context():
+        return getattr(g, "user_id", "system")
+    return "system"
+
+
+def _get_user_context(user_id: str) -> Dict[str, Any]:
+    with USER_CONTEXTS_LOCK:
+        context = USER_CONTEXTS.get(user_id)
+        if not context:
+            context = _create_user_context()
+            USER_CONTEXTS[user_id] = context
+        return context
+
+
+@app.before_request
+def _load_user() -> None:
+    g.user_id = _get_user_id()
 
 
 def _notify_update() -> None:
-    global UPDATE_COUNTER
-    with UPDATE_CONDITION:
-        UPDATE_COUNTER += 1
-        UPDATE_CONDITION.notify_all()
+    context = _get_user_context(g.user_id)
+    condition = context["update_condition"]
+    with condition:
+        context["update_counter"] += 1
+        condition.notify_all()
 
 
 def _set_processing(value: bool) -> None:
-    with STATE_LOCK:
-        STATE["processing"] = value
+    context = _get_user_context(g.user_id)
+    with context["state_lock"]:
+        context["state"]["processing"] = value
     _notify_update()
 
 
 def _set_status(label: str, message: str, tone: str = "idle") -> None:
-    with STATE_LOCK:
-        STATE["status"] = {"label": label, "message": message, "tone": tone}
+    context = _get_user_context(g.user_id)
+    with context["state_lock"]:
+        context["state"]["status"] = {"label": label, "message": message, "tone": tone}
     _notify_update()
 
 
 def _set_product(product: Optional[Dict[str, Any]]) -> None:
-    with STATE_LOCK:
-        STATE["product"] = product
+    context = _get_user_context(g.user_id)
+    with context["state_lock"]:
+        context["state"]["product"] = product
     _notify_update()
 
 
 def _is_processing() -> bool:
-    with STATE_LOCK:
-        return bool(STATE["processing"])
+    context = _get_user_context(g.user_id)
+    with context["state_lock"]:
+        return bool(context["state"]["processing"])
 
 
 def _is_bulk_running() -> bool:
-    with STATE_LOCK:
-        return bool(STATE["bulk"]["running"])
+    context = _get_user_context(g.user_id)
+    with context["state_lock"]:
+        return bool(context["state"]["bulk"]["running"])
 
 
 def _update_bulk_state(**updates: Any) -> None:
-    with STATE_LOCK:
-        STATE["bulk"].update(updates)
+    context = _get_user_context(g.user_id)
+    with context["state_lock"]:
+        context["state"]["bulk"].update(updates)
     _notify_update()
 
 
@@ -141,10 +194,11 @@ def _set_bulk_items(items: List[Dict[str, Any]]) -> None:
 
 
 def _update_bulk_item(index: int, status: str, message: str = "") -> None:
+    context = _get_user_context(g.user_id)
     updated = False
     items_copy = None
-    with STATE_LOCK:
-        items = STATE["bulk"].get("items", [])
+    with context["state_lock"]:
+        items = context["state"]["bulk"].get("items", [])
         if 0 <= index < len(items):
             items[index]["status"] = status
             items[index]["message"] = message
@@ -160,24 +214,28 @@ def _update_bulk_item(index: int, status: str, message: str = "") -> None:
 
 
 def _append_log(msg: str) -> None:
-    global LOG_COUNTER
+    context = _get_user_context(g.user_id)
     timestamp = datetime.now().strftime("%H:%M:%S")
     entry = f"[{timestamp}] {msg}"
-    with LOG_LOCK:
-        LOG_COUNTER += 1
-        LOG_ENTRIES.append({"id": LOG_COUNTER, "message": entry})
-        if len(LOG_ENTRIES) > MAX_LOG_ENTRIES:
-            LOG_ENTRIES[: len(LOG_ENTRIES) - MAX_LOG_ENTRIES] = []
+    with context["log_lock"]:
+        context["log_counter"] += 1
+        context["log_entries"].append({"id": context["log_counter"], "message": entry})
+        if len(context["log_entries"]) > MAX_LOG_ENTRIES:
+            context["log_entries"][: len(context["log_entries"]) - MAX_LOG_ENTRIES] = []
     _notify_update()
 
 
 def _queue_open_url(url: str) -> None:
-    with OPEN_URL_LOCK:
-        OPEN_URLS.append(url)
+    context = _get_user_context(g.user_id)
+    with context["open_url_lock"]:
+        context["open_urls"].append(url)
     _notify_update()
 
 
 class WebIOBridge(IOBridge):
+    def __init__(self, user_id: str) -> None:
+        self.user_id = user_id
+
     def log(self, msg: str) -> None:
         _append_log(str(msg))
 
@@ -195,28 +253,29 @@ class WebIOBridge(IOBridge):
         _append_log(f"Opening URL: {url}")
 
 
-WEB_IO = WebIOBridge()
+def _get_web_io() -> WebIOBridge:
+    return WebIOBridge(g.user_id)
 
 
 def _await_prompt(prompt_type: str, prompt: str, default: str, options: List[str]) -> str:
-    global PROMPT_COUNTER, ACTIVE_PROMPT
+    context = _get_user_context(g.user_id)
     event = threading.Event()
-    with PROMPT_LOCK:
-        PROMPT_COUNTER += 1
-        rid = PROMPT_COUNTER
-        ACTIVE_PROMPT = {
+    with context["prompt_lock"]:
+        context["prompt_counter"] += 1
+        rid = context["prompt_counter"]
+        context["active_prompt"] = {
             "id": rid,
             "type": prompt_type,
             "prompt": prompt,
             "default": default,
             "options": options,
         }
-        PROMPT_EVENTS[rid] = {"event": event, "value": None, "default": default}
+        context["prompt_events"][rid] = {"event": event, "value": None, "default": default}
     _notify_update()
     resolved = event.wait(PROMPT_TIMEOUT_SECONDS)
-    with PROMPT_LOCK:
-        entry = PROMPT_EVENTS.pop(rid, None)
-        ACTIVE_PROMPT = None
+    with context["prompt_lock"]:
+        entry = context["prompt_events"].pop(rid, None)
+        context["active_prompt"] = None
     _notify_update()
     if not resolved:
         _append_log("Prompt timed out; continuing with default value.")
@@ -228,36 +287,38 @@ def _await_prompt(prompt_type: str, prompt: str, default: str, options: List[str
 
 
 def _resolve_prompt(rid: int, value: Optional[str]) -> bool:
-    global ACTIVE_PROMPT
-    with PROMPT_LOCK:
-        entry = PROMPT_EVENTS.get(rid)
+    context = _get_user_context(g.user_id)
+    with context["prompt_lock"]:
+        entry = context["prompt_events"].get(rid)
         if not entry:
             return False
         entry["value"] = value
         entry["event"].set()
-        ACTIVE_PROMPT = None
+        context["active_prompt"] = None
     _notify_update()
     return True
 
 
 def _ensure_ebay_auth() -> Optional[Dict[str, Any]]:
+    web_io = _get_web_io()
+    user_id = g.user_id
     try:
-        tokens = load_tokens() or {}
-        app_token = get_application_token(tokens, WEB_IO)
+        tokens = load_tokens(user_id) or {}
+        app_token = get_application_token(tokens, web_io)
         if not app_token:
-            WEB_IO.log("Failed to ensure application token.")
-            return None
+            web_io.log("Failed to ensure application token.")
+    return None
         tokens["application_token"] = app_token
-        save_tokens(tokens, WEB_IO)
-        user_token = get_ebay_user_token(tokens, WEB_IO)
+        save_tokens(tokens, web_io, user_id)
+        user_token = get_ebay_user_token(tokens, web_io, state=user_id)
         if not user_token:
-            WEB_IO.log("Failed to ensure user token.")
+            web_io.log("Failed to ensure user token.")
             return None
         tokens["user_token"] = user_token
-        save_tokens(tokens, WEB_IO)
+        save_tokens(tokens, web_io, user_id)
         return tokens
     except Exception as exc:
-        WEB_IO.log(f"Auth ensure error: {exc}")
+        web_io.log(f"Auth ensure error: {exc}")
         return None
 
 
@@ -273,32 +334,36 @@ def _parse_custom_specifics(raw: str) -> Dict[str, str]:
 
 @app.route("/")
 def index() -> str:
+    _get_user_context(g.user_id)
     return render_template("index.html", initial_tab="single")
 
 
 @app.route("/bulk")
 def bulk() -> str:
+    _get_user_context(g.user_id)
     return render_template("index.html", initial_tab="bulk")
 
 
 @app.route("/callback")
 def oauth_callback():
     code = request.args.get("code")
+    state = request.args.get("state")
     if code:
-        set_oauth_callback_code(code)
+        set_oauth_callback_code(code, state=state)
         return "<h1>Authentication Successful!</h1><p>You can now return to the app.</p>"
     return "Authentication failed.", 400
 
 
 @app.get("/api/state")
 def api_state():
-    with STATE_LOCK:
-        bulk_state = dict(STATE["bulk"])
+    context = _get_user_context(g.user_id)
+    with context["state_lock"]:
+        bulk_state = dict(context["state"]["bulk"])
         bulk_state["items"] = [dict(item) for item in bulk_state.get("items", [])]
         state = {
-            "product_loaded": STATE["product"] is not None,
-            "processing": STATE["processing"],
-            "status": dict(STATE["status"]),
+            "product_loaded": context["state"]["product"] is not None,
+            "processing": context["state"]["processing"],
+            "status": dict(context["state"]["status"]),
             "bulk": bulk_state,
         }
     return jsonify(state)
@@ -307,9 +372,10 @@ def api_state():
 @app.get("/api/logs")
 def api_logs():
     since = int(request.args.get("since", 0))
-    with LOG_LOCK:
-        entries = [entry for entry in LOG_ENTRIES if entry["id"] > since]
-        last_id = LOG_ENTRIES[-1]["id"] if LOG_ENTRIES else since
+    context = _get_user_context(g.user_id)
+    with context["log_lock"]:
+        entries = [entry for entry in context["log_entries"] if entry["id"] > since]
+        last_id = context["log_entries"][-1]["id"] if context["log_entries"] else since
     return jsonify({"entries": entries, "last_id": last_id})
 
 
@@ -324,8 +390,9 @@ def api_log():
 
 @app.get("/api/prompts")
 def api_prompts():
-    with PROMPT_LOCK:
-        prompt = dict(ACTIVE_PROMPT) if ACTIVE_PROMPT else None
+    context = _get_user_context(g.user_id)
+    with context["prompt_lock"]:
+        prompt = dict(context["active_prompt"]) if context["active_prompt"] else None
     return jsonify({"prompt": prompt})
 
 
@@ -339,9 +406,10 @@ def api_prompt_response(rid: int):
 
 @app.get("/api/open-urls")
 def api_open_urls():
-    with OPEN_URL_LOCK:
-        urls = list(OPEN_URLS)
-        OPEN_URLS.clear()
+    context = _get_user_context(g.user_id)
+    with context["open_url_lock"]:
+        urls = list(context["open_urls"])
+        context["open_urls"].clear()
     return jsonify({"urls": urls})
 
 
@@ -354,12 +422,14 @@ def api_updates():
         since_value = 0
     if since_value < 0:
         return jsonify({"error": "Invalid since value."}), 400
-    with UPDATE_CONDITION:
-        if since_value > UPDATE_COUNTER:
-            return jsonify({"update_id": UPDATE_COUNTER})
-        if UPDATE_COUNTER <= since_value:
-            UPDATE_CONDITION.wait(timeout=UPDATE_WAIT_SECONDS)
-        current = UPDATE_COUNTER
+    context = _get_user_context(g.user_id)
+    condition = context["update_condition"]
+    with condition:
+        if since_value > context["update_counter"]:
+            return jsonify({"update_id": context["update_counter"]})
+        if context["update_counter"] <= since_value:
+            condition.wait(timeout=UPDATE_WAIT_SECONDS)
+        current = context["update_counter"]
     return jsonify({"update_id": current})
 
 
@@ -392,24 +462,28 @@ def api_auth():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
     _set_status("Working", "Authorizing eBay...", "working")
+    user_id = g.user_id
 
     def work():
+        with app.app_context():
+            g.user_id = user_id
         _set_processing(True)
         try:
-            tokens = load_tokens()
-            app_token = get_application_token(tokens, WEB_IO)
+            web_io = _get_web_io()
+            tokens = load_tokens(user_id)
+            app_token = get_application_token(tokens, web_io)
             if not app_token:
                 _set_status("Attention", "Failed to get application token.", "error")
                 return
             tokens["application_token"] = app_token
-            save_tokens(tokens, WEB_IO)
-            user_token = get_ebay_user_token(tokens, WEB_IO)
+            save_tokens(tokens, web_io, user_id)
+            user_token = get_ebay_user_token(tokens, web_io, state=user_id)
             if not user_token:
                 _set_status("Attention", "Failed to get user token.", "error")
                 return
             tokens["user_token"] = user_token
-            save_tokens(tokens, WEB_IO)
-            WEB_IO.log("All tokens are ready.")
+            save_tokens(tokens, web_io, user_id)
+            web_io.log("All tokens are ready.")
             _set_status("Ready", "All tokens are ready.", "success")
         finally:
             _set_processing(False)
@@ -423,16 +497,20 @@ def api_logout():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
     _set_status("Working", "Logging out of eBay...", "working")
+    user_id = g.user_id
 
     def work():
+        with app.app_context():
+            g.user_id = user_id
         _set_processing(True)
         try:
-            ok = clear_user_token(WEB_IO)
+            web_io = _get_web_io()
+            ok = clear_user_token(web_io, user_id)
             if ok:
-                WEB_IO.log("User token cleared. Re-authorize to reconnect your eBay account.")
+                web_io.log("User token cleared. Re-authorize to reconnect your eBay account.")
                 _set_status("Ready", "Logged out from eBay.", "success")
             else:
-                WEB_IO.log("Failed to clear user token. Check permissions and try again.")
+                web_io.log("Failed to clear user token. Check permissions and try again.")
                 _set_status("Attention", "Failed to clear the eBay user token.", "error")
         finally:
             _set_processing(False)
@@ -460,19 +538,23 @@ def api_scrape():
     custom_specs_raw = str(payload.get("custom_specs", "")).strip()
     custom_specs = _parse_custom_specifics(custom_specs_raw) if custom_specs_raw else {}
     _set_status("Working", "Scraping Amazon product...", "working")
+    user_id = g.user_id
 
     def work():
+        with app.app_context():
+            g.user_id = user_id
         _set_processing(True)
         try:
-            product = scrape_amazon(url, note=note, quantity=qty_value, custom_specifics=custom_specs, io=WEB_IO)
+            web_io = _get_web_io()
+            product = scrape_amazon(url, note=note, quantity=qty_value, custom_specifics=custom_specs, io=web_io)
             _set_product(product)
-            WEB_IO.log("Product scraped. You can now list on eBay.")
+            web_io.log("Product scraped. You can now list on eBay.")
             _set_status("Ready", "Product scraped. Ready to list.", "success")
             try:
                 with open("product.json", "w", encoding="utf-8") as handle:
                     json.dump(product, handle, indent=2)
             except (OSError, TypeError, ValueError) as exc:
-                WEB_IO.log(f"Failed to write product.json: {exc}")
+                _get_web_io().log(f"Failed to write product.json: {exc}")
         finally:
             _set_processing(False)
 
@@ -484,26 +566,30 @@ def api_scrape():
 def api_list():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
-    with STATE_LOCK:
-        product = STATE["product"]
+    context = _get_user_context(g.user_id)
+    with context["state_lock"]:
+        product = context["state"]["product"]
     if not product:
         return jsonify({"ok": False, "error": "Please scrape or load a product first."}), 400
     _set_status("Working", "Listing item on eBay...", "working")
+    user_id = g.user_id
 
     def work():
+        with app.app_context():
+            g.user_id = user_id
         _set_processing(True)
         try:
             ensured = _ensure_ebay_auth()
             if not ensured:
-                WEB_IO.log("Authentication failed. Check credentials and try again.")
+                _get_web_io().log("Authentication failed. Check credentials and try again.")
                 _set_status("Attention", "Authentication failed. Check credentials.", "error")
                 return
-            result = list_on_ebay(product, WEB_IO)
+            result = list_on_ebay(product, _get_web_io())
             if result.get("ok"):
-                WEB_IO.log(f"Listing complete. Item ID: {result.get('item_id')}")
+                _get_web_io().log(f"Listing complete. Item ID: {result.get('item_id')}")
                 _set_status("Ready", f"Listing complete. Item ID {result.get('item_id')}.", "success")
             else:
-                WEB_IO.log(f"Listing failed: {result}")
+                _get_web_io().log(f"Listing failed: {result}")
                 _set_status("Attention", "Listing failed. See log for details.", "error")
         finally:
             _set_processing(False)
@@ -516,9 +602,10 @@ def api_list():
 def api_bulk_preview():
     payload = request.get_json(silent=True) or {}
     text = str(payload.get("text", "")).strip()
-    with STATE_LOCK:
-        if STATE["bulk"]["running"]:
-            items = [dict(item) for item in STATE["bulk"].get("items", [])]
+    context = _get_user_context(g.user_id)
+    with context["state_lock"]:
+        if context["state"]["bulk"]["running"]:
+            items = [dict(item) for item in context["state"]["bulk"].get("items", [])]
             return jsonify({"ok": True, "items": items})
     if not text:
         _set_bulk_items([])
@@ -543,15 +630,19 @@ def api_bulk_process():
     prepared_items = _build_bulk_items(items)
     _set_bulk_items(prepared_items)
     _set_status("Working", f"Bulk processing started ({len(items)} items).", "working")
+    user_id = g.user_id
 
     def work():
+        with app.app_context():
+            g.user_id = user_id
+        context = _get_user_context(user_id)
         _update_bulk_state(running=True, paused=False, cancelled=False, processed=0, total=len(prepared_items))
-        bulk_pause_event.set()
-        bulk_cancel_event.clear()
+        context["bulk_pause_event"].set()
+        context["bulk_cancel_event"].clear()
         try:
             ensured = _ensure_ebay_auth()
             if not ensured:
-                WEB_IO.log("Authentication failed. Check credentials and try again.")
+                _get_web_io().log("Authentication failed. Check credentials and try again.")
                 _set_status("Attention", "Authentication failed. Check credentials.", "error")
                 return
             os.makedirs("bulk_products", exist_ok=True)
@@ -559,25 +650,25 @@ def api_bulk_process():
             total_items = len(prepared_items)
             for index, item in enumerate(prepared_items):
                 display_index = item.get("index", index + 1)
-                bulk_pause_event.wait()
-                if bulk_cancel_event.is_set():
-                    WEB_IO.log("Bulk process cancelled.")
+                context["bulk_pause_event"].wait()
+                if context["bulk_cancel_event"].is_set():
+                    _get_web_io().log("Bulk process cancelled.")
                     _update_bulk_item(index, "Cancelled", "Cancelled before processing.")
                     for remaining_index in range(index + 1, total_items):
                         _update_bulk_item(remaining_index, "Cancelled", "Cancelled before processing.")
                     break
                 _set_status("Working", f"Processing item {display_index} of {total_items}.", "working")
                 _update_bulk_item(index, "Scraping", "Scraping Amazon listing.")
-                WEB_IO.log(f"=== Processing Item {display_index}/{total_items} ===")
+                _get_web_io().log(f"=== Processing Item {display_index}/{total_items} ===")
                 product = scrape_amazon(
                     item.get("url", ""),
                     note=item.get("note", ""),
                     quantity=item.get("quantity", 1),
                     custom_specifics=item.get("custom_specifics", {}),
-                    io=WEB_IO,
+                    io=_get_web_io(),
                 )
                 if not product:
-                    WEB_IO.log(f"Skipping item {display_index} due to scraping failure.")
+                    _get_web_io().log(f"Skipping item {display_index} due to scraping failure.")
                     _update_bulk_item(index, "Failed", "Scrape failed.")
                     continue
                 with open(
@@ -587,7 +678,7 @@ def api_bulk_process():
                 ) as handle:
                     json.dump(product, handle, indent=2)
                 _update_bulk_item(index, "Listing", "Listing on eBay.")
-                result = list_on_ebay(product, WEB_IO)
+                result = list_on_ebay(product, _get_web_io())
                 if result.get("ok"):
                     processed_count += 1
                     _update_bulk_item(
@@ -598,13 +689,13 @@ def api_bulk_process():
                 else:
                     _update_bulk_item(index, "Failed", "Listing failed.")
                 _update_bulk_state(processed=processed_count)
-            if not bulk_cancel_event.is_set():
-                WEB_IO.log(f"Bulk processing finished. Processed {processed_count} items.")
+            if not context["bulk_cancel_event"].is_set():
+                _get_web_io().log(f"Bulk processing finished. Processed {processed_count} items.")
                 _set_status("Ready", "Bulk processing finished.", "success")
             else:
                 _set_status("Attention", "Bulk processing cancelled.", "warning")
         finally:
-            _update_bulk_state(running=False, paused=False, cancelled=bulk_cancel_event.is_set())
+            _update_bulk_state(running=False, paused=False, cancelled=context["bulk_cancel_event"].is_set())
 
     threading.Thread(target=work, daemon=True).start()
     return jsonify({"ok": True})
@@ -614,15 +705,16 @@ def api_bulk_process():
 def api_bulk_pause():
     if not _is_bulk_running():
         return jsonify({"ok": False, "error": "Bulk processing is not running."}), 400
-    if bulk_pause_event.is_set():
-        bulk_pause_event.clear()
+    context = _get_user_context(g.user_id)
+    if context["bulk_pause_event"].is_set():
+        context["bulk_pause_event"].clear()
         _update_bulk_state(paused=True)
-        WEB_IO.log("Bulk processing paused.")
+        _get_web_io().log("Bulk processing paused.")
         _set_status("Paused", "Bulk processing paused.", "warning")
         return jsonify({"ok": True, "paused": True})
-    bulk_pause_event.set()
+    context["bulk_pause_event"].set()
     _update_bulk_state(paused=False)
-    WEB_IO.log("Bulk processing resumed.")
+    _get_web_io().log("Bulk processing resumed.")
     _set_status("Working", "Bulk processing resumed.", "working")
     return jsonify({"ok": True, "paused": False})
 
@@ -631,11 +723,12 @@ def api_bulk_pause():
 def api_bulk_cancel():
     if not _is_bulk_running():
         return jsonify({"ok": False, "error": "Bulk processing is not running."}), 400
-    bulk_cancel_event.set()
-    if not bulk_pause_event.is_set():
-        bulk_pause_event.set()
+    context = _get_user_context(g.user_id)
+    context["bulk_cancel_event"].set()
+    if not context["bulk_pause_event"].is_set():
+        context["bulk_pause_event"].set()
     _update_bulk_state(cancelled=True)
-    WEB_IO.log("Cancellation requested...")
+    _get_web_io().log("Cancellation requested...")
     _set_status("Attention", "Bulk processing cancellation requested.", "warning")
     return jsonify({"ok": True})
 
