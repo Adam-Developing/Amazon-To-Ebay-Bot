@@ -397,7 +397,16 @@ async function startUpdatesLoop() {
 }
 
 elements.panelTabs.forEach((tab) => {
-    tab.addEventListener("click", () => toggleTabPanel(tab.dataset.target));
+    tab.addEventListener("click", () => {
+        const target = tab.dataset.target;
+        toggleTabPanel(target);
+        try {
+            const url = target === "bulk-panel" ? "/bulk" : "/";
+            window.history.replaceState({}, "", url);
+        } catch (e) {
+            // ignore
+        }
+    });
 });
 
 elements.loadJsonBtn.addEventListener("click", () => elements.jsonFile.click());
@@ -510,10 +519,26 @@ elements.promptSelect.addEventListener("keydown", (event) =>
 );
 
 elements.toggleLogBtn.addEventListener("click", () => {
-    const isHidden = elements.logView.hidden;
-    elements.logView.hidden = !isHidden;
-    elements.toggleLogBtn.textContent = isHidden ? "Hide Log" : "Show Log";
+    // Toggle both the DOM hidden attribute and the Tailwind hidden class to ensure visibility
+    const isHidden = elements.logView.hasAttribute('hidden') || elements.logView.classList.contains('hidden') || elements.logView.hidden;
+    if (isHidden) {
+        elements.logView.hidden = false;
+        elements.logView.classList.remove('hidden');
+        elements.toggleLogBtn.textContent = 'Hide Log';
+    } else {
+        elements.logView.hidden = true;
+        elements.logView.classList.add('hidden');
+        elements.toggleLogBtn.textContent = 'Show Log';
+    }
 });
+
+// Initialize toggle button text based on current log visibility
+try {
+    const initHidden = elements.logView.hasAttribute('hidden') || elements.logView.classList.contains('hidden') || elements.logView.hidden;
+    elements.toggleLogBtn.textContent = initHidden ? 'Show Log' : 'Hide Log';
+} catch (e) {
+    // ignore
+}
 
 function renderBulkItems(items) {
     if (!elements.bulkItems) {
@@ -572,7 +597,18 @@ function renderBulkItems(items) {
         const note = item.note ? `Note: ${item.note}` : "No note";
         meta.textContent = `Qty: ${item.quantity || 1} • ${note} • ${specifics}`;
 
-        body.appendChild(url);
+        // Render Amazon URL as a clickable link (opens in new tab)
+        if (item.url) {
+            const link = document.createElement("a");
+            link.className = "bulk-item-url";
+            link.href = item.url;
+            link.target = "_blank";
+            link.rel = "noopener";
+            link.textContent = item.url;
+            body.appendChild(link);
+        } else {
+            body.appendChild(url);
+        }
         body.appendChild(meta);
 
         if (item.message) {
@@ -580,6 +616,20 @@ function renderBulkItems(items) {
             message.className = "bulk-item-message";
             message.textContent = item.message;
             body.appendChild(message);
+        }
+
+        // If the item message contains an eBay Item ID, render a direct link to the listing
+        const msg = String(item.message || "");
+        const ebayMatch = msg.match(/Item\s*ID[:\s]*([0-9A-Za-z-]+)/i);
+        if (ebayMatch && ebayMatch[1]) {
+            const itemId = ebayMatch[1];
+            const ebayLink = document.createElement("a");
+            ebayLink.className = "bulk-item-ebay-link";
+            ebayLink.href = `https://www.ebay.co.uk/itm/${itemId}`;
+            ebayLink.target = "_blank";
+            ebayLink.rel = "noopener";
+            ebayLink.textContent = `View on eBay — ${itemId}`;
+            body.appendChild(ebayLink);
         }
 
         card.appendChild(header);
@@ -611,9 +661,15 @@ function scheduleBulkPreview() {
     }, 400);
 }
 
-elements.bulkText.addEventListener("input", scheduleBulkPreview);
+if (elements.bulkText) {
+    elements.bulkText.addEventListener("input", scheduleBulkPreview);
+}
+
+const initialTab = document.body.getAttribute("data-initial-tab") || "single";
+toggleTabPanel(initialTab === "bulk" ? "bulk-panel" : "single-panel");
 
 scheduleBulkPreview();
 
 refreshAll().catch(() => {});
 startUpdatesLoop();
+

@@ -273,7 +273,12 @@ def _parse_custom_specifics(raw: str) -> Dict[str, str]:
 
 @app.route("/")
 def index() -> str:
-    return render_template("index.html")
+    return render_template("index.html", initial_tab="single")
+
+
+@app.route("/bulk")
+def bulk() -> str:
+    return render_template("index.html", initial_tab="bulk")
 
 
 @app.route("/callback")
