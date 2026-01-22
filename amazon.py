@@ -260,5 +260,19 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
         except Exception:
             pass
 
+    # Attempt to generate item specifics using Gemini AI (if available)
+    try:
+        from gemini_helper import generate_item_specifics
+
+        try:
+            generated = generate_item_specifics(prod_info_dict, io=io)
+            if isinstance(generated, dict) and generated:
+                prod_info_dict['generatedSpecifics'] = generated
+        except Exception as exc:
+            io.log(f"Gemini generation error: {exc}")
+    except Exception:
+        # gemini_helper not present or failed to import; skip gracefully
+        pass
+
     io.log("Amazon scrape complete")
     return prod_info_dict
