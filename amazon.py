@@ -118,11 +118,16 @@ def get_image_urls(page):
     try:
         data_obj = json.loads(js_obj)
         initial_images = data_obj.get('colorImages', {}).get('initial', [])
-        return [
-            img.get('hiRes')
-            for img in initial_images
-            if isinstance(img, dict) and img.get('hiRes') is not None
-        ]
+        urls = []
+        for img in initial_images:
+            if not isinstance(img, dict):
+                continue
+            hi_res = img.get('hiRes')
+            if isinstance(hi_res, str):
+                hi_res = hi_res.strip()
+            if hi_res:
+                urls.append(hi_res)
+        return urls
     except json.JSONDecodeError as e:
         print(f"JSON decoding error: {e}")
         return []
@@ -196,8 +201,9 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
     prod_info_dict['importantInformation'] = handle_html_content(page, 'important-information')
 
     title_element = page.find(id='productTitle')
-    if title_element and title_element.text:
-        prod_info_dict['Title'] = title_element.text.strip().encode("ascii", "ignore").decode()
+    title_text = title_element.text.strip() if title_element and title_element.text else ""
+    if title_text:
+        prod_info_dict['Title'] = title_text.encode("ascii", "ignore").decode()
     else:
         prod_info_dict['Title'] = "N/A"
 
