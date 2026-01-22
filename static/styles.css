@@ -1,180 +1,20 @@
-* {
-    box-sizing: border-box;
-}
-
-body {
-    margin: 0;
-    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-    background: #f6f7f9;
-    color: #1f1f1f;
-}
-
-.app-shell {
-    display: flex;
-    height: 100vh;
-}
-
-.left-pane {
-    width: 100%;
-    min-width: 360px;
-    max-width: none;
-    background: #ffffff;
-    border-right: none;
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    overflow-y: auto;
-}
-
-.panel-tabs {
-    display: flex;
-    gap: 8px;
-}
-
 .panel-tab {
-    border: 1px solid #c6c9cf;
-    background: #f0f1f3;
-    padding: 6px 16px;
-    cursor: pointer;
-    border-radius: 6px;
-    font-weight: 600;
+    background: transparent;
 }
 
 .panel-tab.active {
     background: #ffffff;
-    border-bottom: 2px solid #0078d4;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
 }
 
 .panel-body {
     display: none;
-    flex-direction: column;
-    gap: 12px;
 }
 
 .panel-body.active {
-    display: flex;
+    display: block;
 }
 
-.form-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-.form-row input[type="text"],
-.form-row input[type="number"],
-.form-row textarea {
-    flex: 1;
-    min-width: 180px;
-    padding: 6px 8px;
-    border: 1px solid #c6c9cf;
-    border-radius: 6px;
-}
-
-textarea {
-    width: 100%;
-    padding: 8px;
-    border: 1px solid #c6c9cf;
-    border-radius: 6px;
-    resize: vertical;
-}
-
-.button-row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-button {
-    border: 1px solid #b7bbc2;
-    background: #f5f5f5;
-    padding: 6px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-weight: 600;
-}
-
-button:disabled {
-    cursor: not-allowed;
-    opacity: 0.6;
-}
-
-button.secondary {
-    background: #ffffff;
-}
-
-.prompt-panel {
-    border: 1px solid #d5d7dc;
-    padding: 10px;
-    border-radius: 8px;
-    background: #fbfbfd;
-    display: none;
-    /* Use a horizontal, responsive layout so children sizes are proportional */
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap; /* allow wrapping on narrow screens */
-    width: 100%;
-    max-width: 720px; /* cap overall panel width */
-}
-
-.prompt-panel input,
-.prompt-panel select {
-    padding: 6px 8px;
-    border-radius: 6px;
-    border: 1px solid #c6c9cf;
-    /* Allow input/select to grow/shrink proportionally with surrounding elements */
-    flex: 1 1 360px; /* grow, shrink, base width */
-    min-width: 140px;
-    max-width: 100%;
-    box-sizing: border-box;
-}
-
-/* Ensure the buttons sit to the right when there's space */
-.prompt-panel .button-row {
-    display: flex;
-    gap: 8px;
-    flex: 0 0 auto; /* don't grow */
-    margin-left: auto; /* push buttons to the end of the row */
-}
-
-/* When the panel wraps, make the button row take full width so buttons appear on their own line */
-@media (max-width: 520px) {
-    .prompt-panel .button-row {
-        margin-left: 0;
-        width: 100%;
-        justify-content: flex-start;
-    }
-}
-
-.status-card {
-    border: 1px solid #d5d7dc;
-    border-radius: 10px;
-    padding: 12px;
-    background: #f9fafb;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.status-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.status-title {
-    font-weight: 600;
-}
-
-.status-message {
-    font-size: 0.95rem;
-    color: #374151;
-}
-
-/* Spinner used next to the status badge while actions are running */
 .status-spinner {
     display: inline-block;
     width: 18px;
@@ -182,7 +22,7 @@ button.secondary {
     margin-left: 8px;
     border-radius: 50%;
     border: 2px solid rgba(0,0,0,0.08);
-    border-top-color: #0078d4; /* blue accent */
+    border-top-color: #4f46e5;
     animation: spin 0.9s linear infinite;
     vertical-align: middle;
 }
@@ -192,24 +32,16 @@ button.secondary {
     to { transform: rotate(360deg); }
 }
 
-/* Accessibility: when hidden using [hidden], ensure it's not rendered but still in DOM */
 .status-spinner[hidden] { display: none; }
 
-.status-pill {
-    padding: 2px 10px;
-    border-radius: 999px;
-    font-size: 0.8rem;
-    font-weight: 600;
-}
-
 .status-pill[data-tone="idle"] {
-    background: #e5e7eb;
-    color: #374151;
+    background: #e2e8f0;
+    color: #0f172a;
 }
 
 .status-pill[data-tone="working"] {
-    background: #dbeafe;
-    color: #1e3a8a;
+    background: #e0e7ff;
+    color: #312e81;
 }
 
 .status-pill[data-tone="success"] {
@@ -227,100 +59,55 @@ button.secondary {
     color: #991b1b;
 }
 
-.bulk-preview {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.bulk-summary {
-    font-size: 0.9rem;
-    color: #4b5563;
-}
-
-.bulk-items {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.bulk-item {
-    border: 1px solid #e1e4ea;
-    border-radius: 10px;
-    padding: 10px;
-    background: #ffffff;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.bulk-item-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.bulk-item-title {
-    font-weight: 600;
-}
-
-.bulk-item-body {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 0.9rem;
-}
-
-.bulk-item-url {
-    color: #1f2937;
-    word-break: break-word;
-}
-
-.bulk-item-meta {
-    color: #6b7280;
-}
-
-.bulk-item-message {
-    color: #111827;
-    font-weight: 600;
-}
-
-.bulk-empty {
-    border: 1px dashed #d1d5db;
-    border-radius: 8px;
-    padding: 10px;
-    color: #6b7280;
-    text-align: center;
-}
-
-.log-toggle {
-    align-self: flex-start;
-}
-
 .log-view {
-    border: 1px solid #c6c9cf;
-    border-radius: 6px;
-    background: #10131a;
+    border-radius: 10px;
+    background: #0b1021;
     color: #e8e8e8;
-    padding: 8px;
-    /* Use flexible sizing so the log isn't squished when earlier content grows.
-       - min-height prevents it collapsing to an unusably small area
-       - max-height limits how tall it can grow (relative to viewport)
-       - height: auto lets it size naturally between those limits
-       - overflow-y keeps internal scrolling when logs overflow the box */
+    padding: 12px;
     height: auto;
-    min-height: 140px;
+    min-height: 160px;
     max-height: 45vh;
     overflow-y: auto;
     font-family: "Consolas", "Courier New", monospace;
     white-space: pre-wrap;
 }
 
-.browser-retired {
-    border: 1px solid #dcdfe4;
-    border-radius: 6px;
-    padding: 10px;
-    background: #f9fafb;
-    color: #374151;
-    font-size: 0.95rem;
+.bulk-empty {
+    border: 1px dashed #cbd5e1;
+    border-radius: 10px;
+    padding: 12px;
+    color: #64748b;
+    text-align: center;
+}
+
+.input {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100;
+}
+
+.btn {
+    @apply inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-semibold transition shadow-sm border border-transparent;
+}
+
+.btn-primary {
+    @apply bg-indigo-600 text-white hover:bg-indigo-700;
+}
+
+.btn-secondary {
+    @apply bg-white text-slate-800 border-slate-200 hover:border-slate-300 hover:bg-slate-50;
+}
+
+.btn-accent {
+    @apply bg-blue-500 text-white hover:bg-blue-600;
+}
+
+.btn-success {
+    @apply bg-emerald-500 text-white hover:bg-emerald-600;
+}
+
+.btn-danger {
+    @apply bg-rose-500 text-white hover:bg-rose-600;
+}
+
+.btn:disabled {
+    @apply opacity-60 cursor-not-allowed;
 }

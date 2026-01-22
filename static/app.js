@@ -397,7 +397,16 @@ async function startUpdatesLoop() {
 }
 
 elements.panelTabs.forEach((tab) => {
-    tab.addEventListener("click", () => toggleTabPanel(tab.dataset.target));
+    tab.addEventListener("click", () => {
+        const target = tab.dataset.target;
+        toggleTabPanel(target);
+        try {
+            const url = target === "bulk-panel" ? "/bulk" : "/";
+            window.history.replaceState({}, "", url);
+        } catch (e) {
+            // ignore
+        }
+    });
 });
 
 elements.loadJsonBtn.addEventListener("click", () => elements.jsonFile.click());
@@ -612,6 +621,9 @@ function scheduleBulkPreview() {
 }
 
 elements.bulkText.addEventListener("input", scheduleBulkPreview);
+
+const initialTab = document.body.getAttribute("data-initial-tab") || "single";
+toggleTabPanel(initialTab === "bulk" ? "bulk-panel" : "single-panel");
 
 scheduleBulkPreview();
 
