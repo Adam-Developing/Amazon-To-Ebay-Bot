@@ -125,8 +125,8 @@ def get_image_urls(page):
             hi_res = img.get('hiRes')
             if isinstance(hi_res, str):
                 hi_res = hi_res.strip()
-            if hi_res:
-                urls.append(hi_res)
+                if hi_res:
+                    urls.append(hi_res)
         return urls
     except json.JSONDecodeError as e:
         print(f"JSON decoding error: {e}")

@@ -143,7 +143,10 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
             price_variable = -1.0
 
     discount_value = data.get('discount_value', -1.0)
-    discount_value_variable = float(discount_value) if discount_value is not None else -1.0
+    try:
+        discount_value_variable = float(discount_value)
+    except (TypeError, ValueError):
+        discount_value_variable = -1.0
     discount_type_variable = data.get("discount_type", "percentage")
 
     if discount_value_variable != -1.0:

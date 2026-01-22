@@ -140,10 +140,12 @@ def categoryID(access_token, categoryTreeId, title_variable):
         response.raise_for_status()
 
         suggestions = response.json().get('categorySuggestions', [])
+        CategoryID = 14254
         if suggestions:
-            CategoryID = suggestions[0]['category']['categoryId']
-        else:
-            CategoryID = 14254
+            try:
+                CategoryID = suggestions[0]['category']['categoryId']
+            except (TypeError, KeyError, IndexError):
+                CategoryID = 14254
 
 
     except requests.exceptions.HTTPError:
