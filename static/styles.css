@@ -1,9 +1,5 @@
 .panel-tab {
-    background: #e2e8f0;
-    border: 1px solid #cbd5e1;
-    border-radius: 9999px;
-    padding: 10px 16px;
-    font-weight: 700;
+    background: transparent;
 }
 
 .panel-tab.active {
@@ -41,26 +37,47 @@
 .status-pill[data-tone="idle"] {
     background: #e2e8f0;
     color: #0f172a;
+    border-color: #cbd5e1;
 }
 
 .status-pill[data-tone="working"] {
     background: #e0e7ff;
     color: #312e81;
+    border-color: #c7d2fe;
 }
 
 .status-pill[data-tone="success"] {
     background: #dcfce7;
     color: #166534;
+    border-color: #bbf7d0;
 }
 
 .status-pill[data-tone="warning"] {
     background: #fef3c7;
     color: #92400e;
+    border-color: #fde68a;
 }
 
 .status-pill[data-tone="error"] {
     background: #fee2e2;
     color: #991b1b;
+    border-color: #fecaca;
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    border-radius: 9999px;
+    white-space: nowrap;
+    vertical-align: middle;
+    box-shadow: 0 1px 0 rgba(2,6,23,0.04);
+    border: 1px solid transparent;
 }
 
 .log-view {
@@ -84,34 +101,254 @@
     text-align: center;
 }
 
+/* Base input styles (apply to all controls using .input) */
 .input {
+    /* Tailwind utility keep (if used) + explicit fallbacks */
     @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100;
+
+    box-sizing: border-box;
+    border-radius: 8px; /* subtle rounding */
+    padding: 8px 12px;
+    font-size: 14px;
+    background-color: #ffffff;
+    border: 1px solid #e6edf3;
+    color: #0f172a;
+    box-shadow: 0 1px 2px rgba(2,6,23,0.04) inset;
+    transition: box-shadow 120ms ease, border-color 120ms ease;
 }
 
+/* Inputs & selects: fixed compact height for consistent rows */
+input.input, select.input {
+    height: 36px;
+    min-height: 36px;
+    line-height: 1;
+}
+
+/* Textareas should be free to expand and keep monospaced font where requested */
+textarea.input, .input[type="textarea"] {
+    height: auto;
+    padding: 12px;
+    font-family: inherit;
+    resize: vertical;
+}
+
+.input:focus {
+    outline: none;
+    border-color: #4f46e5; /* indigo-600 */
+    box-shadow: 0 0 0 6px rgba(79,70,229,0.06);
+}
+
+.input::placeholder { color: #94a3b8; }
+
+/* Make buttons pill-shaped but smaller and consistent size */
 .btn {
-    @apply inline-flex items-center justify-center rounded-full px-5 py-2 text-sm font-semibold transition shadow-sm border-2 border-slate-200 bg-slate-100 text-slate-800;
+    @apply inline-flex items-center justify-center rounded-full px-5 py-2 text-sm font-semibold transition shadow-sm border-2 border-transparent;
+    box-sizing: border-box;
+    border-radius: 9999px; /* pill */
+    height: 34px; /* uniform button height (slightly smaller) */
+    min-width: 84px; /* compact but consistent */
+    padding: 0 12px; /* horizontal padding only (vertical handled by height) */
+    font-size: 13px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    cursor: pointer;
+    text-decoration: none;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
+/* Make direct child buttons inside grids stretch to fill their grid cell so they match widths */
+.panel-body .grid > .btn,
+.flex.flex-wrap > .btn {
+    width: 100%;
+}
+
+/* Style Load JSON button specifically so it has a subtle background (overrides .btn-secondary where needed) */
+#loadJsonBtn {
+    background-color: #eef2ff; /* light indigo */
+    color: #4338ca; /* indigo-700 */
+    border-color: #c7d2fe;
+}
+#loadJsonBtn:hover { background-color: #e0e7ff; }
+
+/* Make Logout eBay button have a visible border to distinguish it */
+#logoutBtn {
+    border: 1px solid #cbd5e1;
+    background-color: #ffffff;
+    color: #0f172a;
+}
+#logoutBtn:hover { background-color: #f8fafc; }
+
+/* Small / icon-only buttons (keeps them compact) */
+.btn.btn-sm, .btn-sm {
+    height: 30px;
+    min-width: 40px;
+    padding: 0 8px;
+    font-size: 13px;
+}
+
+/* Full width variant in case it's used directly */
+.btn.btn-block {
+    display: flex;
+    width: 100%;
+}
+
+/* Primary (e.g. Process Bulk, Scrape) */
 .btn-primary {
-    @apply bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-2 focus:ring-offset-2 focus:ring-indigo-300 border-indigo-600;
+    @apply bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-2 focus:ring-offset-2 focus:ring-indigo-300;
+    background-color: #4f46e5; /* indigo-600 */
+    color: #ffffff;
 }
+.btn-primary:hover { background-color: #4338ca; }
 
+/* Secondary (e.g. small white buttons, Logout) */
 .btn-secondary {
-    @apply bg-white text-slate-800 border-slate-300 hover:border-slate-400 hover:bg-slate-50 focus:ring-2 focus:ring-offset-2 focus:ring-slate-200;
+    @apply bg-white text-slate-800 border-slate-200 hover:border-slate-300 hover:bg-slate-50 focus:ring-2 focus:ring-offset-2 focus:ring-slate-200;
+    background-color: #ffffff;
+    color: #0f172a;
+    border-color: #e6edf3;
 }
+.btn-secondary:hover { background-color: #f8fafc; }
 
+/* Accent (alternative primary) */
 .btn-accent {
-    @apply bg-blue-500 text-white hover:bg-blue-600 focus:ring-2 focus:ring-offset-2 focus:ring-blue-200 border-blue-500;
+    @apply bg-blue-500 text-white hover:bg-blue-600 focus:ring-2 focus:ring-offset-2 focus:ring-blue-200;
+    background-color: #3b82f6; /* blue-500 */
+    color: #ffffff;
 }
+.btn-accent:hover { background-color: #2563eb; }
 
+/* Success (e.g. success actions) */
 .btn-success {
-    @apply bg-emerald-500 text-white hover:bg-emerald-600 focus:ring-2 focus:ring-offset-2 focus:ring-emerald-200 border-emerald-500;
+    @apply bg-emerald-500 text-white hover:bg-emerald-600 focus:ring-2 focus:ring-offset-2 focus:ring-emerald-200;
+    background-color: #10b981; /* emerald-500 */
+    color: #ffffff;
 }
+.btn-success:hover { background-color: #059669; }
 
+/* Danger (e.g. delete, remove) */
 .btn-danger {
-    @apply bg-rose-500 text-white hover:bg-rose-600 focus:ring-2 focus:ring-offset-2 focus:ring-rose-200 border-rose-500;
+    @apply bg-rose-500 text-white hover:bg-rose-600 focus:ring-2 focus:ring-offset-2 focus:ring-rose-200;
+    background-color: #ef4444; /* red */
+    color: #ffffff;
 }
+.btn-danger:hover { background-color: #dc2626; }
 
 .btn:disabled {
     @apply opacity-60 cursor-not-allowed;
+    opacity: 0.6;
+    cursor: not-allowed;
+    filter: grayscale(10%);
+}
+
+/* Bulk item card and content styling */
+.bulk-item {
+    background: #ffffff;
+    border: 1px solid #e6edf3;
+    border-radius: 10px;
+    padding: 10px;
+    box-shadow: 0 1px 2px rgba(2,6,23,0.04);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Ensure header positions elements and keep badge pinned top-right */
+.bulk-item-header {
+    position: relative;
+    padding-right: 120px; /* leave space for absolute-positioned badge */
+}
+
+.bulk-status {
+    position: absolute;
+    right: 10px;
+    top: 8px;
+    margin-left: 0;
+}
+
+.bulk-item-title {
+    padding-right: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.bulk-item-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    color: #475569;
+    font-size: 13px;
+}
+
+.bulk-item-url {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace;
+    font-size: 13px;
+    color: #0f172a;
+    word-break: break-all;
+}
+
+/* Anchor style for Amazon link in bulk items */
+.bulk-item-body a.bulk-item-url {
+    color: #0f172a;
+    text-decoration: none;
+    background: #f8fafc;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid #e6edf3;
+    display: inline-block;
+    word-break: break-all;
+}
+.bulk-item-body a.bulk-item-url:hover {
+    background: #eef2ff;
+    color: #4338ca;
+}
+
+/* eBay link styling */
+.bulk-item-ebay-link {
+    display: inline-block;
+    margin-top: 8px;
+    color: #0ea5a4; /* teal-ish */
+    text-decoration: none;
+    font-weight: 600;
+}
+.bulk-item-ebay-link:hover {
+    text-decoration: underline;
+}
+
+.bulk-item-meta {
+    font-size: 12px;
+    color: #64748b;
+}
+
+.bulk-item-message {
+    background: #fff7ed;
+    color: #92400e;
+    padding: 6px 8px;
+    border-radius: 8px;
+    font-size: 13px;
+    border: 1px solid #fde68a;
+}
+
+/* Ensure the top status badge matches the small pill size */
+#statusBadge.status-pill {
+    padding: 4px 10px;
+    font-size: 12px;
+}
+
+/* Responsive: on small screens, allow the badge to flow under the title instead of absolute positioning */
+@media (max-width: 640px) {
+    .bulk-item-header {
+        padding-right: 12px;
+    }
+    .bulk-status {
+        position: static;
+        right: auto;
+        top: auto;
+        margin-left: 0;
+        align-self: flex-start;
+    }
 }

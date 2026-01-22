@@ -66,30 +66,43 @@ def parse_bulk_items(text: str) -> List[Dict]:
 
         # 1. Scan block for URL and properties
         for ln in block:
-            # Check URL
+            # Normalize repeated colons/spaces for parsing without mutating the original line used for title heuristics
+            ln_norm = re.sub(r"\s*:\s*", ":", ln)
+            ln_norm = re.sub(r":+", ":", ln_norm).strip()
+            # Ensure a single space after colon for regex matching (e.g. "Quantity:5" -> "Quantity: 5")
+            if ':' in ln_norm:
+                parts = ln_norm.split(':', 1)
+                ln_matchable = f"{parts[0].strip()}: {parts[1].strip()}"
+            else:
+                ln_matchable = ln_norm
+
+            # Check URL (use original line to preserve full URL text)
             if not url:
                 m_url = _url_re.search(ln)
                 if m_url:
                     url = m_url.group(0).strip().rstrip(').,]')
                     continue
 
-            # Check Quantity
-            m_qty = _qty_re.match(ln)
+            # Check Quantity using the normalized, matchable line
+            m_qty = _qty_re.match(ln_matchable)
             if m_qty:
-                qty = int(m_qty.group(1))
+                try:
+                    qty = int(m_qty.group(1))
+                except Exception:
+                    qty = None
                 continue
 
-            # Check Explicit Note (inside the block) - collect all note lines
-            m_note = _note_re.match(ln)
+            # Check Explicit Note (inside the block) - collect all note lines (normalized)
+            m_note = _note_re.match(ln_matchable)
             if m_note:
                 note_val = m_note.group(1).strip()
                 if note_val:
                     local_notes.append(note_val)
                 continue
 
-            # Check Specifics (Key: Value)
-            if ':' in ln and not ln.lower().startswith(('quantity', 'qty', 'note')) and not _url_re.search(ln):
-                cand = _parse_specifics_line(ln)
+            # Check Specifics (Key: Value) using normalized form
+            if ':' in ln_matchable and not ln_matchable.lower().startswith(('quantity', 'qty', 'note')) and not _url_re.search(ln):
+                cand = _parse_specifics_line(ln_matchable)
                 if cand:
                     custom_specifics.update(cand)
 
@@ -123,13 +136,20 @@ def parse_bulk_items(text: str) -> List[Dict]:
         # Candidates are lines that are not URL/qty/note and do not look like key:value specifics.
         title_candidates: List[str] = []
         for ln in block:
-            # Skip URL/qty/note lines
-            if _url_re.search(ln) or _qty_re.match(ln) or _note_re.match(ln):
+            # Skip URL/qty/note lines (use normalized matchable representation for qty/note)
+            ln_norm = re.sub(r"\s*:\s*", ":", ln)
+            ln_norm = re.sub(r":+", ":", ln_norm).strip()
+            if ':' in ln_norm:
+                parts = ln_norm.split(':', 1)
+                ln_matchable = f"{parts[0].strip()}: {parts[1].strip()}"
+            else:
+                ln_matchable = ln_norm
+
+            if _url_re.search(ln) or _qty_re.match(ln_matchable) or _note_re.match(ln_matchable):
                 continue
             # If the line contains a ':' but parses as specifics, skip it
-            if ':' in ln:
-                if _parse_specifics_line(ln):
-                    continue
+            if ':' in ln and _parse_specifics_line(ln):
+                continue
             # Skip extremely short lines
             stripped = ln.strip()
             if len(stripped) < 10:
