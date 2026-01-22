@@ -1,6 +1,8 @@
 # ui_bridge.py
 from __future__ import annotations
 from typing import List, Optional
+import os
+import sys
 import webbrowser
 
 class IOBridge:
@@ -19,7 +21,15 @@ class IOBridge:
 
     def open_url(self, url: str) -> None:
         try:
-            webbrowser.open(url)
+            # Prefer opening a new tab for clarity
+            if not webbrowser.open_new_tab(url):
+                # Fallback to generic open
+                webbrowser.open(url)
         except Exception:
-            pass
-
+            # Windows-specific fallback using os.startfile
+            try:
+                if sys.platform.startswith('win'):
+                    os.startfile(url)
+            except Exception:
+                # Last-resort: print to console (silent logger otherwise)
+                print(f"Failed to open URL: {url}")

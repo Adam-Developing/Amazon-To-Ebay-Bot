@@ -19,6 +19,7 @@ from CentralFunctions import (
 
 load_dotenv()
 
+
 # Helper: choose the most actionable part of an eBay error message
 def _choose_error_message(short: str, long: str) -> str:
     """
@@ -41,6 +42,7 @@ def _choose_error_message(short: str, long: str) -> str:
         if sent and sent.strip():
             return sent.strip()
     return candidate
+
 
 # Helper: detect a missing item specific field from a message
 def _detect_missing_field(message: str) -> str | None:
@@ -66,6 +68,7 @@ def _detect_missing_field(message: str) -> str | None:
     if m:
         return m.group(0).strip()
     return None
+
 
 BANNED_PHRASES = [
     r"warranty",
@@ -109,7 +112,10 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
 
     amazon_open = False
 
-    title_variable = esc_xml(data.get('Title', 'N/A'))
+    raw_title = data.get('Title', 'N/A')
+    if len(raw_title) > 80:
+        raw_title = raw_title[:80]
+    title_variable = esc_xml(raw_title)
     tempDeal_variable = bool(data.get('tempDeal', False))
 
     if title_variable == 'N/A':
@@ -312,10 +318,10 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     <eBayAuthToken>{user_token}</eBayAuthToken>
   </RequesterCredentials>
   <Item>
-    <Title>{title_variable[:80]}</Title>
+    <Title>{title_variable}</Title>
     <Description><![CDATA[{html_description}]]></Description>
     <PrimaryCategory><CategoryID>{catID}</CategoryID></PrimaryCategory>
-    <StartPrice>{price_variable}</StartPrice>
+    <StartPrice>{price_variable}</StartP rice>
     <CategoryMappingAllowed>true</CategoryMappingAllowed>
     <Country>GB</Country>
     <Currency>GBP</Currency>
@@ -422,11 +428,13 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                         has_other_actionable = True
                         break
                     # Field length/value errors
-                    if re.search(r"(?P<field>[\w ]+)'s value of \"(?P<value>.+?)\" is too (long|short)", _long, re.IGNORECASE):
+                    if re.search(r"(?P<field>[\w ]+)'s value of \"(?P<value>.+?)\" is too (long|short)", _long,
+                                 re.IGNORECASE):
                         has_other_actionable = True
                         break
                     # Generic 'too many characters' pattern
-                    if re.search(r'"(?P<val>.{10,})" has too many characters|too many characters.*\"(?P<val2>.+?)\"', _long, re.IGNORECASE):
+                    if re.search(r'"(?P<val>.{10,})" has too many characters|too many characters.*\"(?P<val2>.+?)\"',
+                                 _long, re.IGNORECASE):
                         has_other_actionable = True
                         break
 
@@ -463,10 +471,12 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                         break
 
                     # Best Offer vs AutoPay conflict (use actionable text)
-                    if re.search(r"Best Offer.*immediate payment|immediate payment.*Best Offer", actionable + ' ' + short, re.IGNORECASE):
+                    if re.search(r"Best Offer.*immediate payment|immediate payment.*Best Offer",
+                                 actionable + ' ' + short, re.IGNORECASE):
                         # If there are other actionable errors, skip resolving Best Offer now so we can address them first.
                         if has_other_actionable:
-                            io.log("Skipping Best Offer/AutoPay policy prompt because other actionable errors are present; resolving those first.")
+                            io.log(
+                                "Skipping Best Offer/AutoPay policy prompt because other actionable errors are present; resolving those first.")
                             continue
                         choice = io.prompt_choice(
                             "eBay reports a policy conflict: If this item sells by a Best Offer, you will not be able to require immediate payment.\nChoose how to proceed:",
@@ -487,7 +497,8 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                             return {"ok": False, "ack": ack, "errors": errors}
 
                     # Field length or value errors (use 'long' original matching as before)
-                    m = re.search(r"(?P<field>[\w ]+)'s value of \"(?P<value>.+?)\" is too (?P<issue>long|short)", long, re.IGNORECASE)
+                    m = re.search(r"(?P<field>[\w ]+)'s value of \"(?P<value>.+?)\" is too (?P<issue>long|short)", long,
+                                  re.IGNORECASE)
                     if m:
                         field = m.group('field').strip()
                         current_value = m.group('value')
@@ -540,7 +551,8 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                         break
 
                     # Generic 'too many characters' fallback: try to find a quoted value in the message
-                    q = re.search(r'"(?P<val>.{10,})" has too many characters|too many characters.*\"(?P<val2>.+?)\"', long, re.IGNORECASE)
+                    q = re.search(r'"(?P<val>.{10,})" has too many characters|too many characters.*\"(?P<val2>.+?)\"',
+                                  long, re.IGNORECASE)
                     if q:
                         current_value = q.group('val') if q.group('val') else q.group('val2')
                         prompt = f"eBay reports a value that's too long: {short} - {long}\nPlease provide a corrected value (current shown):"
