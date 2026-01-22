@@ -321,7 +321,7 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     <Title>{title_variable}</Title>
     <Description><![CDATA[{html_description}]]></Description>
     <PrimaryCategory><CategoryID>{catID}</CategoryID></PrimaryCategory>
-    <StartPrice>{price_variable}</StartP rice>
+    <StartPrice>{price_variable:.2f}</StartPrice>
     <CategoryMappingAllowed>true</CategoryMappingAllowed>
     <Country>GB</Country>
     <Currency>GBP</Currency>

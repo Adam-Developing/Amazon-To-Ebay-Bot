@@ -653,4 +653,4 @@ def run_web(host: str = "127.0.0.1", port: int = 5000) -> None:
 
 
 if __name__ == "__main__":
-    run_web()
+    run_web(host="0.0.0.0")
