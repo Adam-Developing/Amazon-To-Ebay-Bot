@@ -271,22 +271,22 @@ def _user_state() -> Dict[str, Any]:
     return _user_state_for(user_id)
 
 
-def _ensure_ebay_auth() -> Optional[Dict[str, Any]]:
+def _ensure_ebay_auth(user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     try:
-        user_id = _current_user_id()
+        resolved_user = user_id or _current_user_id()
         tokens = load_tokens(user_id) or {}
         app_token = get_application_token(tokens, WEB_IO)
         if not app_token:
             WEB_IO.log("Failed to ensure application token.")
             return None
         tokens["application_token"] = app_token
-        save_tokens(tokens, WEB_IO, user_id)
-        user_token = get_ebay_user_token(tokens, WEB_IO, user_id)
+        save_tokens(tokens, WEB_IO, resolved_user)
+        user_token = get_ebay_user_token(tokens, WEB_IO, resolved_user)
         if not user_token:
             WEB_IO.log("Failed to ensure user token.")
             return None
         tokens["user_token"] = user_token
-        save_tokens(tokens, WEB_IO, user_id)
+        save_tokens(tokens, WEB_IO, resolved_user)
         return tokens
     except Exception as exc:
         WEB_IO.log(f"Auth ensure error: {exc}")
@@ -538,7 +538,7 @@ def api_list():
         with STATE_LOCK:
             state["processing"] = True
         try:
-            ensured = _ensure_ebay_auth()
+            ensured = _ensure_ebay_auth(user_id)
             if not ensured:
                 WEB_IO.log("Authentication failed. Check credentials and try again.")
                 _set_status("Attention", "Authentication failed. Check credentials.", "error", user_id=user_id)
@@ -599,7 +599,7 @@ def api_bulk_process():
         bulk_pause_event.set()
         bulk_cancel_event.clear()
         try:
-            ensured = _ensure_ebay_auth()
+            ensured = _ensure_ebay_auth(user_id)
             if not ensured:
                 WEB_IO.log("Authentication failed. Check credentials and try again.")
                 _set_status("Attention", "Authentication failed. Check credentials.", "error", user_id=user_id)
