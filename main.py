@@ -2,4 +2,4 @@ from __future__ import annotations
 from web_app import run_web
 
 if __name__ == "__main__":
-    run_web()
+    run_web(host="0.0.0.0")
