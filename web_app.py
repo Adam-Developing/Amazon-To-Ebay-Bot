@@ -6,7 +6,7 @@ import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, session
 
 from amazon import scrape_amazon
 from bulk_parser import parse_bulk_items
@@ -42,23 +42,27 @@ LOG_LOCK = threading.Lock()
 PROMPT_LOCK = threading.Lock()
 OPEN_URL_LOCK = threading.Lock()
 
-STATE: Dict[str, Any] = {
-    "product": None,
-    "processing": False,
-    "status": {
-        "label": "Idle",
-        "message": "Ready to start.",
-        "tone": "idle",
-    },
-    "bulk": {
-        "running": False,
-        "paused": False,
-        "cancelled": False,
-        "processed": 0,
-        "total": 0,
-        "items": [],
-    },
-}
+def _empty_state() -> Dict[str, Any]:
+    return {
+        "product": None,
+        "processing": False,
+        "status": {
+            "label": "Idle",
+            "message": "Ready to start.",
+            "tone": "idle",
+        },
+        "bulk": {
+            "running": False,
+            "paused": False,
+            "cancelled": False,
+            "processed": 0,
+            "total": 0,
+            "items": [],
+        },
+    }
+
+
+STATE: Dict[str, Any] = _empty_state()
 
 LOG_ENTRIES: List[Dict[str, Any]] = []
 LOG_COUNTER = 0
@@ -240,21 +244,28 @@ def _resolve_prompt(rid: int, value: Optional[str]) -> bool:
     return True
 
 
+def _current_user_id() -> str:
+    if "user_id" not in session:
+        session["user_id"] = os.urandom(16).hex()
+    return str(session["user_id"])
+
+
 def _ensure_ebay_auth() -> Optional[Dict[str, Any]]:
     try:
-        tokens = load_tokens() or {}
+        user_id = _current_user_id()
+        tokens = load_tokens(user_id) or {}
         app_token = get_application_token(tokens, WEB_IO)
         if not app_token:
             WEB_IO.log("Failed to ensure application token.")
             return None
         tokens["application_token"] = app_token
-        save_tokens(tokens, WEB_IO)
-        user_token = get_ebay_user_token(tokens, WEB_IO)
+        save_tokens(tokens, WEB_IO, user_id)
+        user_token = get_ebay_user_token(tokens, WEB_IO, user_id)
         if not user_token:
             WEB_IO.log("Failed to ensure user token.")
             return None
         tokens["user_token"] = user_token
-        save_tokens(tokens, WEB_IO)
+        save_tokens(tokens, WEB_IO, user_id)
         return tokens
     except Exception as exc:
         WEB_IO.log(f"Auth ensure error: {exc}")
@@ -285,7 +296,7 @@ def bulk() -> str:
 def oauth_callback():
     code = request.args.get("code")
     if code:
-        set_oauth_callback_code(code)
+        set_oauth_callback_code(code, _current_user_id())
         return "<h1>Authentication Successful!</h1><p>You can now return to the app.</p>"
     return "Authentication failed.", 400
 
@@ -300,6 +311,7 @@ def api_state():
             "processing": STATE["processing"],
             "status": dict(STATE["status"]),
             "bulk": bulk_state,
+            "user_id": _current_user_id(),
         }
     return jsonify(state)
 
@@ -396,19 +408,20 @@ def api_auth():
     def work():
         _set_processing(True)
         try:
-            tokens = load_tokens()
+            user_id = _current_user_id()
+            tokens = load_tokens(user_id)
             app_token = get_application_token(tokens, WEB_IO)
             if not app_token:
                 _set_status("Attention", "Failed to get application token.", "error")
                 return
             tokens["application_token"] = app_token
-            save_tokens(tokens, WEB_IO)
-            user_token = get_ebay_user_token(tokens, WEB_IO)
+            save_tokens(tokens, WEB_IO, user_id)
+            user_token = get_ebay_user_token(tokens, WEB_IO, user_id)
             if not user_token:
                 _set_status("Attention", "Failed to get user token.", "error")
                 return
             tokens["user_token"] = user_token
-            save_tokens(tokens, WEB_IO)
+            save_tokens(tokens, WEB_IO, user_id)
             WEB_IO.log("All tokens are ready.")
             _set_status("Ready", "All tokens are ready.", "success")
         finally:
@@ -427,7 +440,7 @@ def api_logout():
     def work():
         _set_processing(True)
         try:
-            ok = clear_user_token(WEB_IO)
+            ok = clear_user_token(WEB_IO, _current_user_id())
             if ok:
                 WEB_IO.log("User token cleared. Re-authorize to reconnect your eBay account.")
                 _set_status("Ready", "Logged out from eBay.", "success")
