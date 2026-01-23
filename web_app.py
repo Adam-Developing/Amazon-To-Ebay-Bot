@@ -585,12 +585,15 @@ def api_bulk_process():
     payload = request.get_json(silent=True) or {}
     text = str(payload.get("text", "")).strip()
     if not text:
+        _append_log("Bulk process requested with empty text.")
         return jsonify({"ok": False, "error": "Paste bulk text first."}), 400
     items = parse_bulk_items(text)
     if not items:
+        _append_log("Bulk process: no items parsed from text.")
         return jsonify({"ok": False, "error": "No items could be parsed from the text."}), 400
     prepared_items = _build_bulk_items(items)
     user_id = _current_user_id()
+    _append_log(f"Bulk process: parsed {len(prepared_items)} item(s) for user {user_id}.")
     _set_bulk_items(prepared_items, user_id=user_id)
     _set_status("Working", f"Bulk processing started ({len(items)} items).", "working", user_id=user_id)
 
@@ -616,7 +619,7 @@ def api_bulk_process():
                     for remaining_index in range(index + 1, total_items):
                         _update_bulk_item(remaining_index, "Cancelled", "Cancelled before processing.", user_id=user_id)
                     break
-                _set_status("Working", f"Processing item {display_index} of {total_items}.", "working")
+                _set_status("Working", f"Processing item {display_index} of {total_items}.", "working", user_id=user_id)
                 _update_bulk_item(index, "Scraping", "Scraping Amazon listing.", user_id=user_id)
                 WEB_IO.log(f"=== Processing Item {display_index}/{total_items} ===")
                 product = scrape_amazon(
