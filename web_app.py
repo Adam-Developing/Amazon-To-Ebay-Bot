@@ -257,14 +257,18 @@ def _current_user_id() -> str:
     return str(session["user_id"])
 
 
-def _user_state() -> Dict[str, Any]:
-    user_id = _current_user_id()
+def _user_state_for(user_id: str) -> Dict[str, Any]:
     with STATE_LOCK:
         state = STATE_BY_USER.get(user_id)
         if not state:
             state = _empty_state()
             STATE_BY_USER[user_id] = state
         return state
+
+
+def _user_state() -> Dict[str, Any]:
+    user_id = _current_user_id()
+    return _user_state_for(user_id)
 
 
 def _ensure_ebay_auth() -> Optional[Dict[str, Any]]:
@@ -423,10 +427,11 @@ def api_auth():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
     _set_status("Working", "Authorizing eBay...", "working")
 
-    def work():
-        _set_processing(True)
+    def work(user_id: str):
+        state = _user_state_for(user_id)
+        with STATE_LOCK:
+            state["processing"] = True
         try:
-            user_id = _current_user_id()
             tokens = load_tokens(user_id)
             app_token = get_application_token(tokens, WEB_IO)
             if not app_token:
@@ -443,9 +448,12 @@ def api_auth():
             WEB_IO.log("All tokens are ready.")
             _set_status("Ready", "All tokens are ready.", "success")
         finally:
-            _set_processing(False)
+            with STATE_LOCK:
+                state["processing"] = False
+            _notify_update()
 
-    threading.Thread(target=work, daemon=True).start()
+    user_id = _current_user_id()
+    threading.Thread(target=work, args=(user_id,), daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -468,7 +476,8 @@ def api_logout():
         finally:
             _set_processing(False)
 
-    threading.Thread(target=work, daemon=True).start()
+    user_id = _current_user_id()
+    threading.Thread(target=work, args=(user_id,), daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -507,7 +516,8 @@ def api_scrape():
         finally:
             _set_processing(False)
 
-    threading.Thread(target=work, daemon=True).start()
+    user_id = _current_user_id()
+    threading.Thread(target=work, args=(user_id,), daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -522,8 +532,10 @@ def api_list():
         return jsonify({"ok": False, "error": "Please scrape or load a product first."}), 400
     _set_status("Working", "Listing item on eBay...", "working")
 
-    def work():
-        _set_processing(True)
+    def work(user_id: str):
+        state = _user_state_for(user_id)
+        with STATE_LOCK:
+            state["processing"] = True
         try:
             ensured = _ensure_ebay_auth()
             if not ensured:
@@ -538,9 +550,12 @@ def api_list():
                 WEB_IO.log(f"Listing failed: {result}")
                 _set_status("Attention", "Listing failed. See log for details.", "error")
         finally:
-            _set_processing(False)
+            with STATE_LOCK:
+                state["processing"] = False
+            _notify_update()
 
-    threading.Thread(target=work, daemon=True).start()
+    user_id = _current_user_id()
+    threading.Thread(target=work, args=(user_id,), daemon=True).start()
     return jsonify({"ok": True})
 
 
@@ -548,9 +563,10 @@ def api_list():
 def api_bulk_preview():
     payload = request.get_json(silent=True) or {}
     text = str(payload.get("text", "")).strip()
+    state = _user_state()
     with STATE_LOCK:
-        if STATE["bulk"]["running"]:
-            items = [dict(item) for item in STATE["bulk"].get("items", [])]
+        if state["bulk"]["running"]:
+            items = [dict(item) for item in state["bulk"].get("items", [])]
             return jsonify({"ok": True, "items": items})
     if not text:
         _set_bulk_items([])
@@ -576,7 +592,7 @@ def api_bulk_process():
     _set_bulk_items(prepared_items)
     _set_status("Working", f"Bulk processing started ({len(items)} items).", "working")
 
-    def work():
+    def work(user_id: str):
         _update_bulk_state(running=True, paused=False, cancelled=False, processed=0, total=len(prepared_items))
         bulk_pause_event.set()
         bulk_cancel_event.clear()
