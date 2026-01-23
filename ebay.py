@@ -142,7 +142,11 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
         except Exception:
             price_variable = -1.0
 
-    discount_value_variable = float(data.get('discount_value', -1.0) or -1.0)
+    discount_value = data.get('discount_value', -1.0)
+    try:
+        discount_value_variable = float(discount_value)
+    except (TypeError, ValueError):
+        discount_value_variable = -1.0
     discount_type_variable = data.get("discount_type", "percentage")
 
     if discount_value_variable != -1.0:
@@ -174,7 +178,7 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
             # ignore invalid input and leave price_variable as-is
             pass
 
-    if bool(os.getenv("SELLER_PAY_FEE").lower() == "true"):
+    if os.getenv("SELLER_PAY_FEE", "false").lower() == "true":
         price_variable = find_minimum_price(price_variable)
 
     # Quantity & Seller note (prefer JSON if present)

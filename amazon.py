@@ -21,12 +21,19 @@ IGNORED_KEYS = {k.lower() for k in {'ASIN','Customer Reviews','Best Sellers Rank
 
 
 def handle_table(page, id):
-    prod_info = (page.find(id=id).find_all('tr'))
+    parent = page.find(id=id)
+    if not parent:
+        return {}
+    prod_info = parent.find_all('tr')
     prod_info_dict = {}
     for info in prod_info:
-        key = info.find('th').text.strip()
+        th = info.find('th')
+        td = info.find('td')
+        if not th or not td:
+            continue
+        key = th.text.strip()
         if key.lower() not in IGNORED_KEYS:
-            value = info.find('td').text.strip().encode("ascii", "ignore").decode()
+            value = td.text.strip().encode("ascii", "ignore").decode()
             prod_info_dict[key] = value
     return prod_info_dict
 
@@ -111,7 +118,14 @@ def get_image_urls(page):
     try:
         data_obj = json.loads(js_obj)
         initial_images = data_obj.get('colorImages', {}).get('initial', [])
-        return [img.get('hiRes') for img in initial_images if isinstance(img, dict) and img.get('hiRes')]
+        urls = []
+        for img in initial_images:
+            if not isinstance(img, dict):
+                continue
+            hi_res = img.get('hiRes')
+            if isinstance(hi_res, str) and hi_res.strip():
+                urls.append(hi_res.strip())
+        return urls
     except json.JSONDecodeError as e:
         print(f"JSON decoding error: {e}")
         return []
@@ -184,10 +198,12 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
 
     prod_info_dict['importantInformation'] = handle_html_content(page, 'important-information')
 
-    try:
-        title = page.find(id='productTitle').text.strip().encode("ascii", "ignore").decode()
-        prod_info_dict['Title'] = title
-    except AttributeError:
+    title_element = page.find(id='productTitle')
+    raw_title = getattr(title_element, 'text', '') if title_element else ""
+    title_text = raw_title.strip() if raw_title else ""
+    if title_text:
+        prod_info_dict['Title'] = title_text.encode("ascii", "ignore").decode()
+    else:
         prod_info_dict['Title'] = "N/A"
 
     try:

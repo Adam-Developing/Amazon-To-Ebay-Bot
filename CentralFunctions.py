@@ -139,7 +139,13 @@ def categoryID(access_token, categoryTreeId, title_variable):
         # Raise an exception for bad status codes (4xx or 5xx)
         response.raise_for_status()
 
-        CategoryID = response.json()['categorySuggestions'][0]['category']['categoryId']
+        suggestions = response.json().get('categorySuggestions', [])
+        CategoryID = 14254
+        if suggestions:
+            try:
+                CategoryID = suggestions[0]['category']['categoryId']
+            except (TypeError, KeyError, IndexError):
+                CategoryID = 14254
 
 
     except requests.exceptions.HTTPError:
@@ -337,21 +343,23 @@ def set_seller_note(item_id, note, user_token, app_id, dev_id, cert_id, io: IOBr
         response = requests.post(endpoint, data=xml_body.encode('utf-8'), headers=headers)
         tree = ET.fromstring(response.content)
         namespace = '{urn:ebay:apis:eBLBaseComponents}'
-        ack = tree.find(f'{namespace}Ack').text
+        ack_el = tree.find(f'{namespace}Ack')
+        ack = ack_el.text if ack_el is not None else "Unknown"
 
         if ack in ['Success', 'Warning']:
             io.log("Successfully added/updated the seller note.")
         else:
             io.log("Failed to add seller note.")
             for error in tree.findall(f'{namespace}Errors'):
-                short_message = error.find(f'{namespace}ShortMessage').text
+                short_message_el = error.find(f'{namespace}ShortMessage')
+                short_message = short_message_el.text if short_message_el is not None else ""
                 if short_message:
                     io.log(f"Error: {short_message}")
     except Exception as e:
         io.log(f"An unexpected error occurred while setting the seller note: {e}")
 
 
-FIXED_FEE = float(os.getenv("EBAY_FIXED_FEE", 0.72))
+FIXED_FEE = float(os.getenv("EBAY_FIXED_FEE", "0.72"))
 
 
 def calculate_ebay_fee(item_price):
