@@ -164,7 +164,7 @@ def _update_bulk_item(index: int, status: str, message: str = "", user_id: Optio
             items_copy = [dict(it) for it in items]
     if updated:
         # Publish the updated items into STATE via the helper so api_state will return them
-        _update_bulk_state(items=items_copy)
+        _update_bulk_state(user_id=user_id, items=items_copy)
         _append_log(f"Bulk item {index + 1} status updated to '{status}': {message}")
     else:
         _append_log(f"Bulk item index {index} is out of range.")
