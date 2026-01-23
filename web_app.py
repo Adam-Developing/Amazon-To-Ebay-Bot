@@ -62,7 +62,7 @@ def _empty_state() -> Dict[str, Any]:
     }
 
 
-STATE: Dict[str, Any] = _empty_state()
+STATE_BY_USER: Dict[str, Dict[str, Any]] = {}
 
 LOG_ENTRIES: List[Dict[str, Any]] = []
 LOG_COUNTER = 0
@@ -89,36 +89,42 @@ def _notify_update() -> None:
 
 
 def _set_processing(value: bool) -> None:
+    state = _user_state()
     with STATE_LOCK:
-        STATE["processing"] = value
+        state["processing"] = value
     _notify_update()
 
 
 def _set_status(label: str, message: str, tone: str = "idle") -> None:
+    state = _user_state()
     with STATE_LOCK:
-        STATE["status"] = {"label": label, "message": message, "tone": tone}
+        state["status"] = {"label": label, "message": message, "tone": tone}
     _notify_update()
 
 
 def _set_product(product: Optional[Dict[str, Any]]) -> None:
+    state = _user_state()
     with STATE_LOCK:
-        STATE["product"] = product
+        state["product"] = product
     _notify_update()
 
 
 def _is_processing() -> bool:
+    state = _user_state()
     with STATE_LOCK:
-        return bool(STATE["processing"])
+        return bool(state["processing"])
 
 
 def _is_bulk_running() -> bool:
+    state = _user_state()
     with STATE_LOCK:
-        return bool(STATE["bulk"]["running"])
+        return bool(state["bulk"]["running"])
 
 
 def _update_bulk_state(**updates: Any) -> None:
+    state = _user_state()
     with STATE_LOCK:
-        STATE["bulk"].update(updates)
+        state["bulk"].update(updates)
     _notify_update()
 
 
@@ -147,8 +153,9 @@ def _set_bulk_items(items: List[Dict[str, Any]]) -> None:
 def _update_bulk_item(index: int, status: str, message: str = "") -> None:
     updated = False
     items_copy = None
+    state = _user_state()
     with STATE_LOCK:
-        items = STATE["bulk"].get("items", [])
+        items = state["bulk"].get("items", [])
         if 0 <= index < len(items):
             items[index]["status"] = status
             items[index]["message"] = message
@@ -250,6 +257,16 @@ def _current_user_id() -> str:
     return str(session["user_id"])
 
 
+def _user_state() -> Dict[str, Any]:
+    user_id = _current_user_id()
+    with STATE_LOCK:
+        state = STATE_BY_USER.get(user_id)
+        if not state:
+            state = _empty_state()
+            STATE_BY_USER[user_id] = state
+        return state
+
+
 def _ensure_ebay_auth() -> Optional[Dict[str, Any]]:
     try:
         user_id = _current_user_id()
@@ -303,17 +320,18 @@ def oauth_callback():
 
 @app.get("/api/state")
 def api_state():
+    state = _user_state()
     with STATE_LOCK:
-        bulk_state = dict(STATE["bulk"])
+        bulk_state = dict(state["bulk"])
         bulk_state["items"] = [dict(item) for item in bulk_state.get("items", [])]
-        state = {
-            "product_loaded": STATE["product"] is not None,
-            "processing": STATE["processing"],
-            "status": dict(STATE["status"]),
+        response = {
+            "product_loaded": state["product"] is not None,
+            "processing": state["processing"],
+            "status": dict(state["status"]),
             "bulk": bulk_state,
             "user_id": _current_user_id(),
         }
-    return jsonify(state)
+    return jsonify(response)
 
 
 @app.get("/api/logs")
@@ -497,8 +515,9 @@ def api_scrape():
 def api_list():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
+    state = _user_state()
     with STATE_LOCK:
-        product = STATE["product"]
+        product = state["product"]
     if not product:
         return jsonify({"ok": False, "error": "Please scrape or load a product first."}), 400
     _set_status("Working", "Listing item on eBay...", "working")
