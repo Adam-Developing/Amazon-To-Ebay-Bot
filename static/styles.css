@@ -339,6 +339,22 @@ textarea.input, .input[type="textarea"] {
     font-size: 12px;
 }
 
+/* Prompt panel sizing: keep it compact so it doesn't squeeze the layout */
+#promptPanel {
+    max-width: 420px;
+    width: 100%;
+    margin: 12px auto 0; /* add top gap from status card, center within the aside column */
+    box-sizing: border-box;
+}
+#promptPanel .input,
+#promptPanel select.input {
+    width: 100%;
+}
+#promptLabel {
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}
+
 /* Responsive: on small screens, allow the badge to flow under the title instead of absolute positioning */
 @media (max-width: 640px) {
     .bulk-item-header {

@@ -244,6 +244,22 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
             )
         html_description += '</table>'
 
+    # New: What's in the box section
+    whats_in_box = data.get('whatIsInTheBox', []) or []
+    if isinstance(whats_in_box, list) and whats_in_box:
+        # Sanitize each entry and drop empty ones
+        cleaned = []
+        for x in whats_in_box:
+            t = _sanitize_text_block(str(x))
+            if t:
+                cleaned.append(t)
+        if cleaned:
+            html_description += '<br><h3>What is in the box:</h3>'
+            html_description += '<ul>'
+            for x in cleaned:
+                html_description += f'<li>{esc_xml(x)}</li>'
+            html_description += '</ul>'
+
     important_information = data.get('importantInformation', "") or ""
     if important_information:
         safe_info = _sanitize_text_block(important_information)

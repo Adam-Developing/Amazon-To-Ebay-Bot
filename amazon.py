@@ -3,7 +3,6 @@ from __future__ import annotations
 import requests
 import json
 import re
-import ast
 from typing import Dict, Any, Optional
 from bs4 import BeautifulSoup
 from ui_bridge import IOBridge
@@ -18,6 +17,9 @@ headers = {
 }
 
 IGNORED_KEYS = {k.lower() for k in {'ASIN','Customer Reviews','Best Sellers Rank','Date First Available'}}
+
+# Preferred ID order to try for product info tables
+_ID_ORDER = ['prodDetails', 'tech']
 
 
 def handle_table(page, id):
@@ -130,11 +132,11 @@ def get_image_urls(page):
         print(f"JSON decoding error: {e}")
         return []
 
-ids = ['prodDetails', 'tech']
 
-
-def get_info(page, ids=ids):
-    for id in ids:
+def get_info(page, ids=None):
+    # Avoid mutable default; use module order if none provided
+    id_order = list(ids) if ids is not None else list(_ID_ORDER)
+    for id in id_order:
         try:
             match id:
                 case 'prodDetails':
@@ -160,6 +162,36 @@ def get_product_overview(page, id='productOverview_feature_div'):
     return overview_dict
 
 
+def get_whats_in_the_box(page) -> list[str]:
+    """Extract texts under the Amazon 'What's in the box' list.
+    XPath equivalent: //*[@id="witb-content-list"]/li/span
+    Returns a list of strings (cleaned), or empty list if none found.
+    """
+    try:
+        container = page.find(id='witb-content-list')
+        if not container:
+            return []
+        items = []
+        for li in container.find_all('li'):
+            # Prefer span within li; fallback to li text
+            span = li.find('span')
+            text = span.get_text(separator=' ', strip=True) if span else li.get_text(separator=' ', strip=True)
+            text = (text or '').strip()
+            if text:
+                # Normalise whitespace
+                text = re.sub(r"\s+", " ", text)
+                items.append(text)
+        # Deduplicate while preserving order
+        seen = set()
+        deduped = []
+        for t in items:
+            if t not in seen:
+                deduped.append(t)
+                seen.add(t)
+        return deduped
+    except Exception:
+        return []
+
 # Public API
 
 def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, custom_specifics: Optional[Dict[str, str]] = None, io: Optional[IOBridge] = None) -> Dict[str, Any]:
@@ -183,7 +215,7 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
 
     prod_info_dict: Dict[str, Any] = {}
     prod_info_dict['URL'] = url
-    prod_info_dict['prodDetails'] = get_info(page, ids)
+    prod_info_dict['prodDetails'] = get_info(page, _ID_ORDER)
 
     try:
         featuredBullets_list = page.find(id='feature-bullets')
@@ -195,6 +227,9 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
         prod_info_dict['featuredBullets'] = featuredBullets_array
     except Exception:
         prod_info_dict['featuredBullets'] = []
+
+    # New: What's in the box
+    prod_info_dict['whatIsInTheBox'] = get_whats_in_the_box(page)
 
     prod_info_dict['importantInformation'] = handle_html_content(page, 'important-information')
 
