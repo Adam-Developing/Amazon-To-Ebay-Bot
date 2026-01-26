@@ -522,6 +522,7 @@ The application follows a modular architecture with clear separation of concerns
 - `user_SCOPES`: OAuth scopes for user token
 - `application_SCOPES`: OAuth scopes for application token
 - `TOKENS_FILE`: Filename for token storage (`ebay_tokens.json`)
+- Per-user tokens are stored in `user_tokens/` using a hashed session identifier so multiple users can safely connect their own eBay accounts concurrently.
 
 **Location**: Root directory
 

@@ -509,8 +509,16 @@ elements.jsonFile.addEventListener("change", async (event) => {
 elements.authBtn.addEventListener("click", async () => {
     try { showSpinner(); } catch (e) {}
     const { response, data } = await postJson("/api/auth");
-    if (!response.ok) {
+    if (!response.ok || !data.ok) {
         alert(data.error || "Failed to start auth.");
+        return;
+    }
+    try {
+        const urlsResp = await fetch("/api/open-urls");
+        const urlsData = await urlsResp.json();
+        (urlsData.urls || []).forEach((u) => openExternal(u));
+    } catch (e) {
+        // ignore; state polling will still reflect prompts/logs
     }
 });
 
@@ -749,4 +757,3 @@ scheduleBulkPreview();
 
 refreshAll().catch(() => {});
 startUpdatesLoop();
-

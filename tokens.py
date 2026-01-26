@@ -29,6 +29,7 @@ REDIRECT_URI_HOST = os.getenv("EBAY_REDIRECT_URI_HOST", "").strip()
 user_SCOPES = "https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.marketing https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.fulfillment"
 application_SCOPES = "https://api.ebay.com/oauth/api_scope"
 TOKENS_FILE = "ebay_tokens.json"
+TOKENS_DIR = os.path.join(os.path.dirname(__file__), "user_tokens")
 API_ENDPOINT = "https://api.ebay.com/identity/v1/oauth2/token"
 
 _OAUTH_CODE_LOCK = threading.Lock()
@@ -40,10 +41,24 @@ _OAUTH_FILE_LABEL = "amazon-to-ebay-oauth"
 _OAUTH_FILE_FALLBACK_SALT = f"{getpass.getuser()}-{_OAUTH_FILE_LABEL}"
 
 
-def _oauth_code_file_path() -> str:
-    salt = _OAUTH_FILE_FALLBACK_SALT
-    token = hashlib.sha256(salt.encode()).hexdigest()
+def _hash_user_segment(user_id: Optional[str]) -> str:
+    if not user_id:
+        return hashlib.sha256(_OAUTH_FILE_FALLBACK_SALT.encode()).hexdigest()
+    return hashlib.sha256(user_id.encode()).hexdigest()
+
+
+def _oauth_code_file_path(user_id: Optional[str]) -> str:
+    token = _hash_user_segment(user_id)
     return os.path.join(tempfile.gettempdir(), f"amazon_to_ebay_oauth_{token}.txt")
+
+
+def _tokens_file_path(user_id: Optional[str]) -> str:
+    """Return a per-user token file path."""
+    if not user_id:
+        return TOKENS_FILE
+    hashed = _hash_user_segment(user_id)
+    os.makedirs(TOKENS_DIR, exist_ok=True)
+    return os.path.join(TOKENS_DIR, f"ebay_tokens_{hashed}.json")
 
 
 def _reload_env() -> None:
@@ -56,7 +71,7 @@ def _reload_env() -> None:
     REDIRECT_URI_HOST = os.getenv("EBAY_REDIRECT_URI_HOST", "").strip()
 
 
-def _poll_oauth_code() -> Optional[str]:
+def _poll_oauth_code(user_id: Optional[str]) -> Optional[str]:
     """Return any cached OAuth code and clear stale events. Caller must hold _OAUTH_CODE_LOCK."""
     global _OAUTH_CODE_VALUE
     if _OAUTH_CODE_VALUE:
@@ -64,7 +79,7 @@ def _poll_oauth_code() -> Optional[str]:
         _OAUTH_CODE_VALUE = None
         _OAUTH_CODE_EVENT.clear()
         return code
-    code_file = _oauth_code_file_path()
+    code_file = _oauth_code_file_path(user_id)
     if os.path.exists(code_file):
         try:
             mode = stat.S_IMODE(os.stat(code_file).st_mode)
@@ -90,14 +105,14 @@ def _poll_oauth_code() -> Optional[str]:
     return None
 
 
-def set_oauth_callback_code(code: str) -> None:
+def set_oauth_callback_code(code: str, user_id: Optional[str] = None) -> None:
     """Allow external web servers to pass the OAuth code back to this module."""
     global _OAUTH_CODE_VALUE
     with _OAUTH_CODE_LOCK:
         _OAUTH_CODE_VALUE = code
         _OAUTH_CODE_EVENT.set()
         try:
-            code_file = _oauth_code_file_path()
+            code_file = _oauth_code_file_path(user_id)
             for _ in range(2):
                 try:
                     os.remove(code_file)
@@ -116,29 +131,32 @@ def set_oauth_callback_code(code: str) -> None:
             _LOGGER.warning("Failed to write OAuth code file.")
 
 
-def save_tokens(tokens, io: IOBridge):
-    with open(TOKENS_FILE, 'w') as f:
+def save_tokens(tokens, io: IOBridge, user_id: Optional[str] = None):
+    path = _tokens_file_path(user_id)
+    with open(path, 'w') as f:
         json.dump(tokens, f, indent=4)
     io.log("Token data saved.")
 
 
-def load_tokens():
+def load_tokens(user_id: Optional[str] = None):
+    path = _tokens_file_path(user_id)
     try:
-        with open(TOKENS_FILE, 'r') as f:
+        with open(path, 'r') as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 
-def clear_user_token(io: IOBridge) -> bool:
+def clear_user_token(io: IOBridge, user_id: Optional[str] = None) -> bool:
     try:
-        tokens = load_tokens()
+        tokens = load_tokens(user_id)
         if not tokens:
             io.log("No token file found; nothing to clear.")
             return True
         if 'user_token' in tokens:
             tokens.pop('user_token', None)
-            with open(TOKENS_FILE, 'w') as f:
+            path = _tokens_file_path(user_id)
+            with open(path, 'w') as f:
                 json.dump(tokens, f, indent=4)
             io.log("User token removed.")
         return True
@@ -205,7 +223,7 @@ def refresh_user_token(refresh_token_value, io: IOBridge):
         return None
 
 
-def get_user_token_full_flow(io: IOBridge):
+def get_user_token_full_flow(io: IOBridge, user_id: Optional[str] = None):
     _reload_env()
     auth_code = None
 
@@ -219,7 +237,7 @@ def get_user_token_full_flow(io: IOBridge):
     deadline = time.monotonic() + OAUTH_CODE_TIMEOUT_SECONDS
     while not auth_code:
         with _OAUTH_CODE_LOCK:
-            auth_code = _poll_oauth_code()
+            auth_code = _poll_oauth_code(user_id)
 
         if auth_code:
             break
@@ -262,7 +280,7 @@ def get_user_token_full_flow(io: IOBridge):
         return None
 
 
-def get_ebay_user_token(existing_tokens, io: IOBridge):
+def get_ebay_user_token(existing_tokens, io: IOBridge, user_id: Optional[str] = None):
     io.log("Checking user token…")
     user_token_data = existing_tokens.get('user_token', {})
 
@@ -279,4 +297,4 @@ def get_ebay_user_token(existing_tokens, io: IOBridge):
             return refreshed
         io.log("Refresh failed; falling back to login…")
 
-    return get_user_token_full_flow(io)
+    return get_user_token_full_flow(io, user_id)
