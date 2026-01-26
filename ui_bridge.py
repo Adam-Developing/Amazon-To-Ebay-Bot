@@ -13,7 +13,8 @@ class IOBridge:
     def log(self, msg: str) -> None:
         pass
 
-    def prompt_text(self, prompt: str, default: str = "") -> str:
+    def prompt_text(self, prompt: str, default: str = "", options: List[str] | None = None) -> str:
+        # Base bridge ignores options and returns default; UI implementations can use options for suggestions
         return default
 
     def prompt_choice(self, prompt: str, options: List[str]) -> Optional[str]:
@@ -21,10 +22,8 @@ class IOBridge:
 
     def open_url(self, url: str) -> None:
         try:
-            # Prefer opening a new tab for clarity
-            if not webbrowser.open_new_tab(url):
-                # Fallback to generic open
-                webbrowser.open(url)
+            # Use a single call with autoraise=False to avoid stealing focus when supported.
+            webbrowser.open(url, new=2, autoraise=False)
         except Exception:
             # Windows-specific fallback using os.startfile
             try:

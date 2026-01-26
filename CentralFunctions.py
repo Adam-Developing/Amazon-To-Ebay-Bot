@@ -242,12 +242,10 @@ def get_item_specifics(token, category_tree_id, category_id, product_data, io: I
             return aspect_name in item_specifics and str(item_specifics[aspect_name]).strip() != ""
 
         # ---------- 6) Validate against taxonomy & prompt as needed ----------
-        # First, attempt AI suggestions for missing REQUIRED aspects only
         taxonomy_aspects = taxonomy.get('aspects', []) if taxonomy else []
         required_aspects = [a for a in taxonomy_aspects if (a.get('aspectConstraint', {}) or {}).get('aspectRequired', False)]
         ai_suggestions = suggest_item_specifics_with_gemini(product_data, required_aspects)
         if ai_suggestions:
-            # apply only for required aspect names
             required_names = {a.get('localizedAspectName') for a in required_aspects}
             for k, v in ai_suggestions.items():
                 if k in required_names and (k not in item_specifics or str(item_specifics.get(k, '')).strip() == ""):
@@ -255,9 +253,9 @@ def get_item_specifics(token, category_tree_id, category_id, product_data, io: I
 
         for aspect in taxonomy.get('aspects', []):
             name = aspect['localizedAspectName']   # exact eBay casing
-            mode = aspect.get('aspectConstraint', {}).get('aspectMode')
-            required = aspect.get('aspectConstraint', {}).get('aspectRequired', False)
-            options = [ov.get('localizedValue') for ov in aspect.get('aspectValues', [])] if aspect.get('aspectValues') else []
+            mode = (aspect.get('aspectConstraint', {}) or {}).get('aspectMode')
+            required = (aspect.get('aspectConstraint', {}) or {}).get('aspectRequired', False)
+            options = [ov.get('localizedValue') for ov in (aspect.get('aspectValues') or [])] or []
 
             if has_value_for(name):
                 val = item_specifics[name]
@@ -276,7 +274,7 @@ def get_item_specifics(token, category_tree_id, category_id, product_data, io: I
                             item_specifics[name] = choice
                 continue
 
-            # Missing
+            # Missing value handling
             if required:
                 if mode == 'SELECTION_ONLY' and options:
                     # Prefer AI suggestion
@@ -292,9 +290,21 @@ def get_item_specifics(token, category_tree_id, category_id, product_data, io: I
                     if ai_val:
                         item_specifics[name] = ai_val
                     else:
-                        val = io.prompt_text(f"Please enter a value for '{name}':", default="").strip()
+                        # FREE_TEXT mode: provide taxonomy options as suggestions to help user type
+                        suggestions = options if options else []
+                        val = io.prompt_text(f"Please enter a value for '{name}':", default="", options=suggestions).strip()
                         if val:
                             item_specifics[name] = val
+            else:
+                # Optional aspect not provided: do NOT prompt user. Use AI suggestion if available; otherwise leave unset.
+                ai_val = ai_suggestions.get(name)
+                if ai_val:
+                    # For SELECTION_ONLY, only set if AI suggestion matches allowed options
+                    if mode == 'SELECTION_ONLY' and options:
+                        if any(str(ai_val).lower() == (str(opt) or "").lower() for opt in options):
+                            item_specifics[name] = ai_val
+                    else:
+                        item_specifics[name] = ai_val
 
         io.log("--- Finished Populating Item Specifics ---")
         return item_specifics

@@ -80,6 +80,81 @@ def handle_html_content(page, id):
     element = page.find(id=id)
     return str(element) if element else None
 
+# New: parse product facts expander section
+# Example XPath: //*[@id="productFactsDesktopExpander"]/div[1]/div
+# Amazon markup typically contains multiple div.product-facts-detail entries with left/right columns.
+
+def get_product_facts(page, id='productFactsDesktopExpander') -> Dict[str, str]:
+    facts: Dict[str, str] = {}
+    try:
+        root = page.find(id=id)
+        if not root:
+            return facts
+        # Each detail row is typically a div with class 'product-facts-detail'
+        for row in root.find_all('div', class_='product-facts-detail'):
+            try:
+                left = row.find('div', class_='a-col-left') or row.select_one('.a-col-left')
+                right = row.find('div', class_='a-col-right') or row.select_one('.a-col-right')
+                # Labels and values are generally nested spans; use get_text to be robust
+                key = left.get_text(separator=' ', strip=True) if left else ''
+                value = right.get_text(separator=' ', strip=True) if right else ''
+                key = (key or '').strip()
+                value = (value or '').strip()
+                if not key or not value:
+                    continue
+                # Clean up: remove non-word punctuation except spaces and basic separators
+                key_clean = re.sub(r'[^\w\s-]', '', key).strip()
+                # Normalise whitespace in value
+                value_clean = re.sub(r'\s+', ' ', value)
+                if key_clean and key_clean.lower() not in IGNORED_KEYS:
+                    facts[key_clean] = value_clean.encode("ascii", "ignore").decode()
+            except Exception:
+                continue
+        return facts
+    except Exception:
+        return facts
+
+# New: parse product facts UL list under the expander section
+# XPath: //*[@id="productFactsDesktopExpander"]/div[1]/ul
+
+def get_product_facts_list(page, id='productFactsDesktopExpander') -> list[str]:
+    items: list[str] = []
+    try:
+        root = page.find(id=id)
+        if not root:
+            return items
+        # Target the first child div then ul within it, or any ul fallback
+        first_div = None
+        for child in root.find_all(recursive=False):
+            if child.name == 'div':
+                first_div = child
+                break
+        ul = None
+        if first_div:
+            ul = first_div.find('ul')
+        if not ul:
+            # Fallback: any UL directly under root
+            ul = root.find('ul')
+        if not ul:
+            return items
+        for li in ul.find_all('li'):
+            span = li.find('span')
+            text = span.get_text(separator=' ', strip=True) if span else li.get_text(separator=' ', strip=True)
+            text = (text or '').strip()
+            if text:
+                text = re.sub(r"\s+", " ", text)
+                items.append(text)
+        # Deduplicate while preserving order
+        seen = set()
+        deduped = []
+        for t in items:
+            if t not in seen:
+                deduped.append(t)
+                seen.add(t)
+        return deduped
+    except Exception:
+        return items
+
 def get_image_urls(page):
     # 1. Find the specific script tag containing the image data
     # We look for a script tag that contains the string 'ImageBlockATF'
@@ -217,6 +292,26 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
     prod_info_dict['URL'] = url
     prod_info_dict['prodDetails'] = get_info(page, _ID_ORDER)
 
+    # Include Product facts under a unified 'Product details' heading if available
+    product_facts = get_product_facts(page)
+    product_facts_list = get_product_facts_list(page)
+    try:
+        if product_facts or product_facts_list:
+            merged_details = dict(prod_info_dict.get('prodDetails', {}))
+            merged_details.update(product_facts)
+            if product_facts_list:
+                # Store as a single string inside Product details to satisfy typing of detail dict
+                merged_details['FactsList'] = '; '.join(product_facts_list)
+            prod_info_dict['Product details'] = merged_details
+        elif prod_info_dict.get('prodDetails'):
+            prod_info_dict['Product details'] = dict(prod_info_dict['prodDetails'])
+    except Exception:
+        if product_facts or product_facts_list:
+            fallback = dict(product_facts)
+            if product_facts_list:
+                fallback['FactsList'] = '; '.join(product_facts_list)
+            prod_info_dict['Product details'] = fallback
+
     try:
         featuredBullets_list = page.find(id='feature-bullets')
         bullet_points = featuredBullets_list.find_all('li') if featuredBullets_list else []
@@ -313,16 +408,17 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
 
     # Attempt to generate item specifics using Gemini AI (if available)
     try:
-        from gemini_helper import generate_item_specifics
+        from gemini_helper import suggest_item_specifics_with_gemini
 
         try:
-            generated = generate_item_specifics(prod_info_dict, io=io)
+            generated = suggest_item_specifics_with_gemini(prod_info_dict, io=io)
             if isinstance(generated, dict) and generated:
                 prod_info_dict['generatedSpecifics'] = generated
         except Exception as exc:
             io.log(f"Gemini generation error: {exc}")
-    except Exception:
+    except Exception as e:
         # gemini_helper not present or failed to import; skip gracefully
+        print(f"Gemini generation error: {e}")
         pass
 
     io.log("Amazon scrape complete")

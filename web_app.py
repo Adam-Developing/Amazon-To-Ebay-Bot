@@ -181,8 +181,9 @@ class WebIOBridge(IOBridge):
     def log(self, msg: str) -> None:
         _append_log(str(msg))
 
-    def prompt_text(self, prompt: str, default: str = "") -> str:
-        return _await_prompt("text", prompt, default, [])
+    def prompt_text(self, prompt: str, default: str = "", options: List[str] | None = None) -> str:
+        # Allow passing suggestions for FREE_TEXT prompts (shown as typeable dropdown in UI)
+        return _await_prompt("text", prompt, default, options or [])
 
     def prompt_choice(self, prompt: str, options: List[str]) -> Optional[str]:
         value = _await_prompt("choice", prompt, "", options)

@@ -9,7 +9,13 @@ window.addEventListener('message', (event) => {
         chrome.runtime.sendMessage({ type: 'amazonToEbay_open_url_from_content', url: d.url }, () => {
           // Notify the page that we handled it so it won't open another tab
           try {
-            window.postMessage({ type: 'amazonToEbay_open_url_handled', url: d.url }, '*');
+            // Echo back identifiers so the page can match and mark as handled
+            window.postMessage({
+              type: 'amazonToEbay_open_url_handled',
+              url: d.url,
+              requestId: d.requestId,
+              windowId: d.windowId,
+            }, '*');
           } catch (e) {
             // ignore
           }

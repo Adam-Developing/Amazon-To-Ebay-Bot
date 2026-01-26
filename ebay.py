@@ -231,18 +231,40 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                 html_description += f'<li>{esc_xml(item)}</li>'
             html_description += '</ul><br>'
 
+    # Prefer unified Product details; fallback to legacy prodDetails
+    product_details = data.get('Product details', {}) or {}
     prod_details = data.get('prodDetails', {}) or {}
-    if prod_details:
-        html_description += '<table style="background-color: #f2f2f2; border: 1px solid black; border-collapse: collapse; color: black;">'
-        for key, value in prod_details.items():
-            safe_val = _sanitize_text_block(str(value))
-            if not safe_val:
-                continue
-            html_description += (
-                f'<tr><td style="border: 1px solid black; padding: 5px;"><b>{esc_xml(str(key))}</b></td>'
-                f'<td style="border: 1px solid black; padding: 5px;">{esc_xml(safe_val)}</td></tr>'
-            )
-        html_description += '</table>'
+    if product_details or prod_details:
+        # Merge for display so both sources show; Product details entries take precedence
+        merged = dict(prod_details)
+        merged.update({k: v for k, v in product_details.items() if k != 'FactsList'})
+        if merged:
+            html_description += '<h3>Product details</h3>'
+            html_description += '<table style="background-color: #f2f2f2; border: 1px solid black; border-collapse: collapse; color: black;">'
+            for key, value in merged.items():
+                safe_val = _sanitize_text_block(str(value))
+                if not safe_val:
+                    continue
+                html_description += (
+                    f'<tr><td style="border: 1px solid black; padding: 5px;"><b>{esc_xml(str(key))}</b></td>'
+                    f'<td style="border: 1px solid black; padding: 5px;">{esc_xml(safe_val)}</td></tr>'
+                )
+            html_description += '</table>'
+        # Optional bullets list under product details
+        facts_list = product_details.get('FactsList', '') or ''
+        if isinstance(facts_list, str) and facts_list.strip():
+            # Split on ';' used in scraper and render as bullets
+            bullets = [b.strip() for b in facts_list.split(';') if b and b.strip()]
+            cleaned = []
+            for b in bullets:
+                t = _sanitize_text_block(b)
+                if t:
+                    cleaned.append(t)
+            if cleaned:
+                html_description += '<ul>'
+                for b in cleaned:
+                    html_description += f'<li>{esc_xml(b)}</li>'
+                html_description += '</ul>'
 
     # New: What's in the box section
     whats_in_box = data.get('whatIsInTheBox', []) or []

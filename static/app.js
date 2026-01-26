@@ -89,25 +89,69 @@ async function postJson(url, payload) {
     return { response, data };
 }
 
+function generateUuid() {
+    // Simple UUID v4 generator (non-crypto) for window scoping
+    const hex = [...Array(256)].map((_, i) => (i).toString(16).padStart(2, '0'));
+    const r = () => Math.random() * 256 | 0;
+    return (
+        hex[r()] + hex[r()] + '-' +
+        hex[r()] + '-' +
+        (r() & 0x0f | 0x40).toString(16) + ((r()) & 0x3f | 0x80).toString(16) + '-' +
+        hex[r()] + '-' +
+        hex[r()] + hex[r()] + hex[r()]
+    );
+}
+
+// Per-window identity to help the extension target the correct browser window/tab
+const AMAZON_TO_EBAY_WINDOW_ID_KEY = 'amazonToEbayWindowId';
+let amazonToEbayWindowId = null;
+try {
+    amazonToEbayWindowId = sessionStorage.getItem(AMAZON_TO_EBAY_WINDOW_ID_KEY);
+    if (!amazonToEbayWindowId) {
+        amazonToEbayWindowId = generateUuid();
+        sessionStorage.setItem(AMAZON_TO_EBAY_WINDOW_ID_KEY, amazonToEbayWindowId);
+    }
+} catch (e) {
+    // ignore storage errors
+}
+
 function openExternal(url) {
     if (!url) {
         return;
     }
 
-    // Send a message to any installed helper extension via window.postMessage.
-    // The extension's content script can intercept this and ask the extension
-    // background script to create the new tab at the index (currentTab.index + 1).
-    // We wait briefly for an acknowledgement; if no extension handles it we
-    // open a normal new tab (_blank).
-    const request = { type: 'amazonToEbay_open_url_request', url };
+    // Build a detailed request the extension can use to open the tab next to the current one
+    const requestId = generateUuid();
+    const request = {
+        type: 'amazonToEbay_open_url_request',
+        url,
+        windowId: amazonToEbayWindowId,
+        requestId,
+        // Hints to the extension for where/how to open
+        disposition: {
+            position: 'nextToCurrent', // open right next to this UI tab
+            makeActive: true,          // focus the new tab
+            reuseIfSameUrl: false,     // avoid clobbering other windows
+        },
+        page: {
+            href: location.href,
+            title: document.title,
+        },
+        timestamp: Date.now(),
+    };
     let handled = false;
 
     function onMessage(event) {
         if (!event || !event.data) return;
         const d = event.data;
-        if (d && d.type === 'amazonToEbay_open_url_handled' && d.url === url) {
+        if (
+            d && d.type === 'amazonToEbay_open_url_handled' &&
+            d.url === url &&
+            d.requestId === requestId &&
+            d.windowId === amazonToEbayWindowId
+        ) {
             handled = true;
-            window.removeEventListener('message', onMessage);
+            try { window.removeEventListener('message', onMessage); } catch (_) {}
         }
     }
 
@@ -122,11 +166,11 @@ function openExternal(url) {
     setTimeout(() => {
         if (handled) return;
         try {
-            window.open(url, "_blank", "noopener");
+            window.open(url, '_blank', 'noopener');
         } catch (e) {
             // ignore
         }
-    }, 250);
+    }, 600);
 }
 
 function toggleTabPanel(targetId) {
@@ -146,20 +190,38 @@ function showPrompt(prompt) {
     lastPromptType = prompt.type;
     if (!elements.promptPanel) return;
     elements.promptLabel.textContent = prompt.prompt;
+
+    // Clear previous datalist if present
+    const datalist = document.getElementById('promptDatalist');
+
     if (prompt.type === "choice") {
+        // Strict choice -> show select only, hide text input suggestions
         elements.promptSelect.innerHTML = "";
-        prompt.options.forEach((option) => {
+        (prompt.options || []).forEach((option) => {
             const opt = document.createElement("option");
             opt.value = option;
             opt.textContent = option;
             elements.promptSelect.appendChild(opt);
         });
+        if (datalist) datalist.innerHTML = "";
         elements.promptSelect.hidden = false;
         elements.promptInput.hidden = true;
     } else {
+        // Free text: show input; if options exist, make them suggestions via datalist
+        const hasSuggestions = Array.isArray(prompt.options) && prompt.options.length > 0;
         elements.promptInput.value = prompt.default || "";
         elements.promptInput.hidden = false;
         elements.promptSelect.hidden = true;
+        if (datalist) {
+            datalist.innerHTML = "";
+            (prompt.options || []).forEach((option) => {
+                const opt = document.createElement('option');
+                opt.value = option;
+                datalist.appendChild(opt);
+            });
+        }
+        // Hint that the field supports suggestions
+        elements.promptInput.placeholder = hasSuggestions ? "Type or choose…" : "";
     }
     // Make sure the panel is visible for layout: clear hidden attribute and set display
     try {
@@ -167,7 +229,22 @@ function showPrompt(prompt) {
     } catch (e) {
         // ignore if not supported
     }
-    elements.promptPanel.style.display = 'flex';
+    // Use block layout so buttons stack below the input/select
+    elements.promptPanel.style.display = 'block';
+
+    // Focus the active control for faster input
+    try {
+        if (prompt.type === 'choice') {
+            elements.promptSelect.focus();
+        } else {
+            elements.promptInput.focus();
+            // Place cursor at end
+            const len = elements.promptInput.value.length;
+            elements.promptInput.setSelectionRange(len, len);
+        }
+    } catch (e) {
+        // ignore focus errors
+    }
 }
 
 function hidePrompt() {

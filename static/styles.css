@@ -355,6 +355,14 @@ textarea.input, .input[type="textarea"] {
     overflow-wrap: anywhere;
 }
 
+/* Activity Log card: reduce maximum width so it stays compact */
+#activityLogCard {
+    max-width: 340px; /* narrower than prompt panel */
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+}
+
 /* Responsive: on small screens, allow the badge to flow under the title instead of absolute positioning */
 @media (max-width: 640px) {
     .bulk-item-header {
