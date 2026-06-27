@@ -71,7 +71,7 @@ PROMPT_EVENTS: Dict[int, Dict[str, Any]] = {}
 ACTIVE_PROMPT: Optional[Dict[str, Any]] = None
 PROMPT_COUNTER = 0
 
-OPEN_URLS: List[str] = []
+OPEN_URLS: List[Dict[str, str]] = []
 
 bulk_pause_event = threading.Event()
 bulk_cancel_event = threading.Event()
@@ -196,9 +196,9 @@ def _append_log(msg: str) -> None:
     _notify_update()
 
 
-def _queue_open_url(url: str) -> None:
+def _queue_open_url(url: str, window_id: Optional[str] = None) -> None:
     with OPEN_URL_LOCK:
-        OPEN_URLS.append(url)
+        OPEN_URLS.append({"url": url, "window_id": window_id})
     _notify_update()
 
 
@@ -206,6 +206,7 @@ class WebIOBridge(IOBridge):
     def __init__(self) -> None:
         super().__init__()
         self.suppress_cancellation = False
+        self.active_window_id = None
 
     def log(self, msg: str) -> None:
         if cancellation_event.is_set() and not self.suppress_cancellation:
@@ -229,7 +230,7 @@ class WebIOBridge(IOBridge):
     def open_url(self, url: str) -> None:
         if cancellation_event.is_set() and not self.suppress_cancellation:
             raise OperationCancelled("Operation cancelled by user.")
-        _queue_open_url(url)
+        _queue_open_url(url, getattr(self, "active_window_id", None))
         _append_log(f"Opening URL: {url}")
 
 
@@ -388,9 +389,13 @@ def api_prompt_response(rid: int):
 
 @app.get("/api/open-urls")
 def api_open_urls():
+    window_id = request.args.get("window_id")
+    if not window_id:
+        return jsonify({"urls": []})
     with OPEN_URL_LOCK:
-        urls = list(OPEN_URLS)
-        OPEN_URLS.clear()
+        global OPEN_URLS
+        urls = [item["url"] for item in OPEN_URLS if item.get("window_id") == window_id]
+        OPEN_URLS = [item for item in OPEN_URLS if item.get("window_id") != window_id]
     return jsonify({"urls": urls})
 
 
@@ -440,10 +445,13 @@ def api_load_json():
 def api_auth():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
+    payload = request.get_json(silent=True) or {}
+    window_id = payload.get("window_id")
     _clear_cancellation()
     _set_status("Working", "Authorizing eBay...", "working")
 
     def work():
+        WEB_IO.active_window_id = window_id
         _set_processing(True)
         try:
             tokens = load_tokens()
@@ -475,10 +483,13 @@ def api_auth():
 def api_logout():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
+    payload = request.get_json(silent=True) or {}
+    window_id = payload.get("window_id")
     _clear_cancellation()
     _set_status("Working", "Logging out of eBay...", "working")
 
     def work():
+        WEB_IO.active_window_id = window_id
         _set_processing(True)
         try:
             ok = clear_user_token(WEB_IO)
@@ -503,6 +514,7 @@ def api_scrape():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
     payload = request.get_json(silent=True) or {}
+    window_id = payload.get("window_id")
     url = str(payload.get("url", "")).strip()
     if not url:
         return jsonify({"ok": False, "error": "Please enter an Amazon URL."}), 400
@@ -520,6 +532,7 @@ def api_scrape():
     _set_status("Working", "Scraping Amazon product...", "working")
 
     def work():
+        WEB_IO.active_window_id = window_id
         _set_processing(True)
         try:
             product = scrape_amazon(url, note=note, quantity=qty_value, custom_specifics=custom_specs, io=WEB_IO)
@@ -545,6 +558,8 @@ def api_scrape():
 def api_list():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
+    payload = request.get_json(silent=True) or {}
+    window_id = payload.get("window_id")
     with STATE_LOCK:
         product = STATE["product"]
     if not product:
@@ -553,6 +568,7 @@ def api_list():
     _set_status("Working", "Listing item on eBay...", "working")
 
     def work():
+        WEB_IO.active_window_id = window_id
         _set_processing(True)
         try:
             ensured = _ensure_ebay_auth()
@@ -599,6 +615,7 @@ def api_bulk_process():
     if _is_bulk_running():
         return jsonify({"ok": False, "error": "Bulk processing is already running."}), 400
     payload = request.get_json(silent=True) or {}
+    window_id = payload.get("window_id")
     text = str(payload.get("text", "")).strip()
     if not text:
         return jsonify({"ok": False, "error": "Paste bulk text first."}), 400
@@ -611,6 +628,7 @@ def api_bulk_process():
     _set_status("Working", f"Bulk processing started ({len(items)} items).", "working")
 
     def work():
+        WEB_IO.active_window_id = window_id
         _update_bulk_state(running=True, paused=False, cancelled=False, processed=0, total=len(prepared_items))
         bulk_pause_event.set()
         try:

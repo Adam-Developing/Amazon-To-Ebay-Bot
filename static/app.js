@@ -74,10 +74,14 @@ function hideSpinner() {
 
 async function postJson(url, payload) {
     if (elements.loadingSpinner) showSpinner();
+    const finalPayload = {
+        ...(payload || {}),
+        window_id: amazonToEbayWindowId
+    };
     const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload || {}),
+        body: JSON.stringify(finalPayload),
     });
     let data;
     try {
@@ -444,7 +448,7 @@ async function refreshState() {
 }
 
 async function refreshOpenUrls() {
-    const response = await fetch("/api/open-urls");
+    const response = await fetch(`/api/open-urls?window_id=${encodeURIComponent(amazonToEbayWindowId)}`);
     if (!response.ok) {
         return;
     }
