@@ -23,6 +23,15 @@ from pathlib import Path
 
 load_dotenv()
 
+OPEN_LISTING_PAGE = os.getenv("OPEN_LISTING_PAGE", "edit").strip().lower()
+
+
+def _build_listing_open_url(item_id: str) -> str:
+    item_id = str(item_id).strip()
+    if OPEN_LISTING_PAGE == "view":
+        return f"https://www.ebay.co.uk/itm/{item_id}"
+    return f"https://www.ebay.co.uk/sl/list?mode=ReviseItem&itemId={item_id}&ReturnURL=https%3A%2F%2Fwww.ebay.co.uk%2Fsh%2Flst%2Factive%3Foffset%3D0"
+
 
 # Helper: choose the most actionable part of an eBay error message
 def _choose_error_message(short: str, long: str) -> str:
@@ -186,9 +195,7 @@ def _handle_duplicate_listing(
         if success_note is None:
             success_note = True
 
-    io.open_url(
-        f"https://www.ebay.co.uk/sl/list?mode=ReviseItem&itemId={existing_item_id}&ReturnURL=https%3A%2F%2Fwww.ebay.co.uk%2Fsh%2Flst%2Factive%3Foffset%3D0"
-    )
+    io.open_url(_build_listing_open_url(existing_item_id))
 
     return {
         "ok": True,
@@ -655,9 +662,9 @@ def _list_on_ebay_impl(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                     io.log(f"New Item ID: {item_id}")
                     if seller_note:
                         set_seller_note(item_id, seller_note, user_token, app_id, dev_id, cert_id, io)
-                    io.log("Opening the revise item page…")
-                    revise_url = f"https://www.ebay.co.uk/sl/list?mode=ReviseItem&itemId={item_id}&ReturnURL=https%3A%2F%2Fwww.ebay.co.uk%2Fsh%2Flst%2Factive%3Foffset%3D0"
-                    io.open_url(revise_url)
+                    open_mode = "viewing" if OPEN_LISTING_PAGE == "view" else "edit"
+                    io.log(f"Opening the listing {open_mode} page…")
+                    io.open_url(_build_listing_open_url(item_id))
                     result.update({"ok": True, "ack": ack, "item_id": item_id})
                 else:
                     io.log("Listing succeeded, but no ItemID found in response.")
@@ -1007,4 +1014,3 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                 pass
 
     return result
-
