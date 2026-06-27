@@ -75,10 +75,20 @@ OPEN_URLS: List[str] = []
 
 bulk_pause_event = threading.Event()
 bulk_cancel_event = threading.Event()
+cancellation_event = threading.Event()
+
+class OperationCancelled(Exception):
+    pass
+
+def _clear_cancellation() -> None:
+    cancellation_event.clear()
+    bulk_cancel_event.clear()
+    WEB_IO.suppress_cancellation = False
 
 UPDATE_COUNTER = 0
 UPDATE_LOCK = threading.Lock()
 UPDATE_CONDITION = threading.Condition(UPDATE_LOCK)
+
 
 
 def _notify_update() -> None:
@@ -193,20 +203,32 @@ def _queue_open_url(url: str) -> None:
 
 
 class WebIOBridge(IOBridge):
+    def __init__(self) -> None:
+        super().__init__()
+        self.suppress_cancellation = False
+
     def log(self, msg: str) -> None:
+        if cancellation_event.is_set() and not self.suppress_cancellation:
+            raise OperationCancelled("Operation cancelled by user.")
         _append_log(str(msg))
 
     def prompt_text(self, prompt: str, default: str = "", options: List[str] | None = None) -> str:
+        if cancellation_event.is_set() and not self.suppress_cancellation:
+            raise OperationCancelled("Operation cancelled by user.")
         # Allow passing suggestions for FREE_TEXT prompts (shown as typeable dropdown in UI)
         return _await_prompt("text", prompt, default, options or [])
 
     def prompt_choice(self, prompt: str, options: List[str]) -> Optional[str]:
+        if cancellation_event.is_set() and not self.suppress_cancellation:
+            raise OperationCancelled("Operation cancelled by user.")
         value = _await_prompt("choice", prompt, "", options)
         if value is not None:
             return value
         return options[0] if options else None
 
     def open_url(self, url: str) -> None:
+        if cancellation_event.is_set() and not self.suppress_cancellation:
+            raise OperationCancelled("Operation cancelled by user.")
         _queue_open_url(url)
         _append_log(f"Opening URL: {url}")
 
@@ -216,6 +238,8 @@ WEB_IO = WebIOBridge()
 
 def _await_prompt(prompt_type: str, prompt: str, default: str, options: List[str]) -> str:
     global PROMPT_COUNTER, ACTIVE_PROMPT
+    if cancellation_event.is_set() and not getattr(WEB_IO, "suppress_cancellation", False):
+        raise OperationCancelled("Operation cancelled by user.")
     event = threading.Event()
     with PROMPT_LOCK:
         PROMPT_COUNTER += 1
@@ -229,14 +253,23 @@ def _await_prompt(prompt_type: str, prompt: str, default: str, options: List[str
         }
         PROMPT_EVENTS[rid] = {"event": event, "value": None, "default": default}
     _notify_update()
-    resolved = event.wait(PROMPT_TIMEOUT_SECONDS)
+    
+    # Wait until either the event is resolved, or the cancellation event is set
+    while not event.is_set():
+        if cancellation_event.is_set() and not getattr(WEB_IO, "suppress_cancellation", False):
+            with PROMPT_LOCK:
+                PROMPT_EVENTS.pop(rid, None)
+                ACTIVE_PROMPT = None
+            _notify_update()
+            raise OperationCancelled("Operation cancelled by user.")
+        event.wait(timeout=0.1)
+        
     with PROMPT_LOCK:
         entry = PROMPT_EVENTS.pop(rid, None)
         ACTIVE_PROMPT = None
     _notify_update()
-    if not resolved:
-        _append_log("Prompt timed out; continuing with default value.")
-        return default
+    if cancellation_event.is_set() and not getattr(WEB_IO, "suppress_cancellation", False):
+        raise OperationCancelled("Operation cancelled by user.")
     if not entry:
         return default
     value = entry.get("value")
@@ -407,6 +440,7 @@ def api_load_json():
 def api_auth():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
+    _clear_cancellation()
     _set_status("Working", "Authorizing eBay...", "working")
 
     def work():
@@ -427,6 +461,9 @@ def api_auth():
             save_tokens(tokens, WEB_IO)
             WEB_IO.log("All tokens are ready.")
             _set_status("Ready", "All tokens are ready.", "success")
+        except OperationCancelled:
+            _set_status("Attention", "Authorization cancelled by user.", "warning")
+            _append_log("Operation cancelled by user.")
         finally:
             _set_processing(False)
 
@@ -438,6 +475,7 @@ def api_auth():
 def api_logout():
     if _is_processing():
         return jsonify({"ok": False, "error": "Another task is running."}), 400
+    _clear_cancellation()
     _set_status("Working", "Logging out of eBay...", "working")
 
     def work():
@@ -450,6 +488,9 @@ def api_logout():
             else:
                 WEB_IO.log("Failed to clear user token. Check permissions and try again.")
                 _set_status("Attention", "Failed to clear the eBay user token.", "error")
+        except OperationCancelled:
+            _set_status("Attention", "Logout cancelled by user.", "warning")
+            _append_log("Operation cancelled by user.")
         finally:
             _set_processing(False)
 
@@ -475,6 +516,7 @@ def api_scrape():
             qty_value = None
     custom_specs_raw = str(payload.get("custom_specs", "")).strip()
     custom_specs = _parse_custom_specifics(custom_specs_raw) if custom_specs_raw else {}
+    _clear_cancellation()
     _set_status("Working", "Scraping Amazon product...", "working")
 
     def work():
@@ -489,6 +531,9 @@ def api_scrape():
                     json.dump(product, handle, indent=2)
             except (OSError, TypeError, ValueError) as exc:
                 WEB_IO.log(f"Failed to write product.json: {exc}")
+        except OperationCancelled:
+            _set_status("Attention", "Scraping cancelled by user.", "warning")
+            _append_log("Operation cancelled by user.")
         finally:
             _set_processing(False)
 
@@ -504,6 +549,7 @@ def api_list():
         product = STATE["product"]
     if not product:
         return jsonify({"ok": False, "error": "Please scrape or load a product first."}), 400
+    _clear_cancellation()
     _set_status("Working", "Listing item on eBay...", "working")
 
     def work():
@@ -521,6 +567,9 @@ def api_list():
             else:
                 WEB_IO.log(f"Listing failed: {result}")
                 _set_status("Attention", "Listing failed. See log for details.", "error")
+        except OperationCancelled:
+            _set_status("Attention", "Listing cancelled by user.", "warning")
+            _append_log("Operation cancelled by user.")
         finally:
             _set_processing(False)
 
@@ -558,12 +607,12 @@ def api_bulk_process():
         return jsonify({"ok": False, "error": "No items could be parsed from the text."}), 400
     prepared_items = _build_bulk_items(items)
     _set_bulk_items(prepared_items)
+    _clear_cancellation()
     _set_status("Working", f"Bulk processing started ({len(items)} items).", "working")
 
     def work():
         _update_bulk_state(running=True, paused=False, cancelled=False, processed=0, total=len(prepared_items))
         bulk_pause_event.set()
-        bulk_cancel_event.clear()
         try:
             ensured = _ensure_ebay_auth()
             if not ensured:
@@ -576,12 +625,8 @@ def api_bulk_process():
             for index, item in enumerate(prepared_items):
                 display_index = item.get("index", index + 1)
                 bulk_pause_event.wait()
-                if bulk_cancel_event.is_set():
-                    WEB_IO.log("Bulk process cancelled.")
-                    _update_bulk_item(index, "Cancelled", "Cancelled before processing.")
-                    for remaining_index in range(index + 1, total_items):
-                        _update_bulk_item(remaining_index, "Cancelled", "Cancelled before processing.")
-                    break
+                if bulk_cancel_event.is_set() or cancellation_event.is_set():
+                    raise OperationCancelled("Operation cancelled by user.")
                 _set_status("Working", f"Processing item {display_index} of {total_items}.", "working")
                 _update_bulk_item(index, "Scraping", "Scraping Amazon listing.")
                 WEB_IO.log(f"=== Processing Item {display_index}/{total_items} ===")
@@ -614,13 +659,20 @@ def api_bulk_process():
                 else:
                     _update_bulk_item(index, "Failed", "Listing failed.")
                 _update_bulk_state(processed=processed_count)
-            if not bulk_cancel_event.is_set():
+            if not bulk_cancel_event.is_set() and not cancellation_event.is_set():
                 WEB_IO.log(f"Bulk processing finished. Processed {processed_count} items.")
                 _set_status("Ready", "Bulk processing finished.", "success")
             else:
                 _set_status("Attention", "Bulk processing cancelled.", "warning")
+        except OperationCancelled:
+            WEB_IO.suppress_cancellation = True
+            WEB_IO.log("Bulk process cancelled.")
+            _update_bulk_item(index, "Cancelled", "Cancelled by user.")
+            for remaining_index in range(index + 1, total_items):
+                _update_bulk_item(remaining_index, "Cancelled", "Cancelled before processing.")
+            _set_status("Attention", "Bulk processing cancelled.", "warning")
         finally:
-            _update_bulk_state(running=False, paused=False, cancelled=bulk_cancel_event.is_set())
+            _update_bulk_state(running=False, paused=False, cancelled=bulk_cancel_event.is_set() or cancellation_event.is_set())
 
     threading.Thread(target=work, daemon=True).start()
     return jsonify({"ok": True})
@@ -654,6 +706,99 @@ def api_bulk_cancel():
     WEB_IO.log("Cancellation requested...")
     _set_status("Attention", "Bulk processing cancellation requested.", "warning")
     return jsonify({"ok": True})
+
+
+@app.post("/api/cancel-all")
+def api_cancel_all():
+    global ACTIVE_PROMPT
+    cancellation_event.set()
+    bulk_cancel_event.set()
+    if not bulk_pause_event.is_set():
+        bulk_pause_event.set()
+    
+    with PROMPT_LOCK:
+        for rid, entry in list(PROMPT_EVENTS.items()):
+            entry["event"].set()
+        ACTIVE_PROMPT = None
+        
+    _set_processing(False)
+    _update_bulk_state(running=False)
+    
+    _append_log("Stop requested. All operations cancelled.")
+    _set_status("Attention", "All operations cancelled.", "warning")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/reset-workspace")
+def api_reset_workspace():
+    global ACTIVE_PROMPT, LOG_ENTRIES, LOG_COUNTER
+    # 1. Stop all operations
+    cancellation_event.set()
+    bulk_cancel_event.set()
+    if not bulk_pause_event.is_set():
+        bulk_pause_event.set()
+        
+    with PROMPT_LOCK:
+        for rid, entry in list(PROMPT_EVENTS.items()):
+            entry["event"].set()
+        ACTIVE_PROMPT = None
+        
+    # 2. Reset STATE in memory (except logs)
+    with STATE_LOCK:
+        STATE["product"] = None
+        STATE["processing"] = False
+        STATE["status"] = {
+            "label": "Idle",
+            "message": "Workspace reset complete.",
+            "tone": "idle",
+        }
+        STATE["bulk"] = {
+            "running": False,
+            "paused": False,
+            "cancelled": False,
+            "processed": 0,
+            "total": 0,
+            "items": [],
+        }
+        
+    with LOG_LOCK:
+        LOG_ENTRIES.clear()
+        LOG_COUNTER = 0
+        
+    with OPEN_URL_LOCK:
+        OPEN_URLS.clear()
+        
+    _notify_update()
+    
+    # 3. Clear temporary files on disk (excluding log files)
+    if os.path.exists("product.json"):
+        try:
+            os.remove("product.json")
+        except Exception:
+            pass
+            
+    if os.path.exists("bulk_products"):
+        for filename in os.listdir("bulk_products"):
+            filepath = os.path.join("bulk_products", filename)
+            if os.path.isfile(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+                    
+    if os.path.exists("listing_images"):
+        for filename in os.listdir("listing_images"):
+            filepath = os.path.join("listing_images", filename)
+            if os.path.isfile(filepath):
+                try:
+                    os.remove(filepath)
+                except Exception:
+                    pass
+                    
+    _append_log("Workspace has been reset. Temporary cache cleared.")
+    _set_status("Idle", "Workspace reset complete.", "idle")
+    return jsonify({"ok": True})
+
 
 
 def run_web(host: str = "127.0.0.1", port: int = 5000) -> None:

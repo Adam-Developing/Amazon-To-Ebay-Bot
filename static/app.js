@@ -12,7 +12,8 @@ const elements = {
     bulkText: document.getElementById("bulkText"),
     bulkProcessBtn: document.getElementById("bulkProcessBtn"),
     bulkPauseBtn: document.getElementById("bulkPauseBtn"),
-    bulkCancelBtn: document.getElementById("bulkCancelBtn"),
+    cancelAllBtn: document.getElementById("cancelAllBtn"),
+    resetWorkspaceBtn: document.getElementById("resetWorkspaceBtn"),
     promptPanel: document.getElementById("promptPanel"),
     promptLabel: document.getElementById("promptLabel"),
     promptInput: document.getElementById("promptInput"),
@@ -37,6 +38,7 @@ let activePromptId = null;
 let lastPromptType = null;
 let bulkPreviewTimeout = null;
 let updatesAbortController = null;
+let cancelPressed = false;
 
 const BULK_STATUS_TONES = {
     Ready: "idle",
@@ -286,23 +288,22 @@ function clearBulkItemsUI() {
     if (elements.bulkPauseBtn) {
         elements.bulkPauseBtn.hidden = true;
     }
-    if (elements.bulkCancelBtn) {
-        elements.bulkCancelBtn.hidden = true;
-    }
     if (elements.bulkProcessBtn) {
         elements.bulkProcessBtn.disabled = false;
     }
 }
 
 async function cancelPublishingAndCleanup() {
-    // If the server is waiting on a prompt, resolve it first so it doesn't hang
-    try {
-        if (activePromptId !== null) {
-            // send null as cancellation to the active prompt
-            await postJson(`/api/prompts/${activePromptId}`, { value: null });
-        }
-    } catch (e) {
-        // ignore prompt resolution errors
+    cancelPressed = true;
+    
+    // UI update instantly: hide cancel button, show reset workspace button
+    if (elements.cancelAllBtn) {
+        elements.cancelAllBtn.hidden = true;
+        elements.cancelAllBtn.style.display = "none";
+    }
+    if (elements.resetWorkspaceBtn) {
+        elements.resetWorkspaceBtn.hidden = false;
+        elements.resetWorkspaceBtn.style.display = "inline-flex";
     }
 
     // Hide any visible prompt panel on the client
@@ -312,13 +313,11 @@ async function cancelPublishingAndCleanup() {
         // ignore
     }
 
-    // Call server cancel endpoint for bulk publishing
-    const { response, data } = await postJson("/api/bulk/cancel");
+    // Call server cancel endpoint for all operations
+    const { response, data } = await postJson("/api/cancel-all");
     if (!response.ok) {
         return { ok: false, data };
     }
-    // UI cleanup
-    clearBulkItemsUI();
     // Refresh state to sync UI with server
     try {
         await refreshState();
@@ -400,7 +399,6 @@ async function refreshState() {
     const running = Boolean(bulk.running);
     elements.bulkProcessBtn.disabled = running;
     elements.bulkPauseBtn.hidden = !running;
-    elements.bulkCancelBtn.hidden = !running;
     elements.bulkPauseBtn.textContent = bulk.paused ? "Resume" : "Pause";
     if (elements.bulkMeta) {
         const total = bulk.total || 0;
@@ -412,6 +410,34 @@ async function refreshState() {
     }
     if (elements.bulkItems) {
         renderBulkItems(bulk.items || []);
+    }
+
+    // Dynamic visibility for Cancel All and Reset Workspace buttons
+    const isProcessing = data.processing || running;
+    if (isProcessing) {
+        cancelPressed = false;
+        if (elements.cancelAllBtn) {
+            elements.cancelAllBtn.hidden = false;
+            elements.cancelAllBtn.style.display = "inline-block";
+        }
+        if (elements.resetWorkspaceBtn) {
+            elements.resetWorkspaceBtn.hidden = true;
+            elements.resetWorkspaceBtn.style.display = "none";
+        }
+    } else {
+        if (elements.cancelAllBtn) {
+            elements.cancelAllBtn.hidden = true;
+            elements.cancelAllBtn.style.display = "none";
+        }
+        if (elements.resetWorkspaceBtn) {
+            if (cancelPressed) {
+                elements.resetWorkspaceBtn.hidden = false;
+                elements.resetWorkspaceBtn.style.display = "inline-block";
+            } else {
+                elements.resetWorkspaceBtn.hidden = true;
+                elements.resetWorkspaceBtn.style.display = "none";
+            }
+        }
     }
 
     return data;
@@ -562,12 +588,38 @@ elements.bulkPauseBtn.addEventListener("click", async () => {
     }
 });
 
-// Updated cancel handler: cancel publishing, clean UI
-elements.bulkCancelBtn.addEventListener("click", async () => {
+// Cancel All Operations click handler
+elements.cancelAllBtn.addEventListener("click", async () => {
     try { showSpinner(); } catch (e) {}
     const result = await cancelPublishingAndCleanup();
     if (!result.ok) {
-        alert(result.data.error || "Failed to cancel bulk.");
+        alert(result.data.error || "Failed to cancel operations.");
+    }
+});
+
+// Reset Workspace click handler (preserves logs on disk, clears RAM and cache files)
+elements.resetWorkspaceBtn.addEventListener("click", async () => {
+    if (!confirm("Are you sure you want to reset the workspace? This will clear all temporary products, bulk lists, and images (log files will not be touched).")) {
+        return;
+    }
+    try { showSpinner(); } catch (e) {}
+    const response = await fetch("/api/reset-workspace", { method: "POST" });
+    if (response.ok) {
+        cancelPressed = false;
+        
+        // Clear UI inputs
+        elements.amazonUrl.value = "";
+        elements.quantity.value = "";
+        elements.sellerNote.value = "";
+        elements.customSpecs.value = "";
+        elements.bulkText.value = "";
+        
+        // Clear activity log and bulk list previews
+        elements.logView.textContent = "";
+        clearBulkItemsUI();
+        await refreshState();
+    } else {
+        alert("Failed to reset workspace.");
     }
 });
 
@@ -576,7 +628,7 @@ elements.promptCancel.addEventListener("click", async () => {
     try { showSpinner(); } catch (e) {}
     const result = await cancelPublishingAndCleanup();
     if (!result.ok) {
-        alert(result.data.error || "Failed to cancel bulk.");
+        alert(result.data.error || "Failed to cancel operations.");
     }
 });
 

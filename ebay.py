@@ -879,6 +879,7 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
             import traceback
 
             try:
+                setattr(io, "suppress_cancellation", True)
                 original_log(f"Exception during listing: {exc}")
                 original_log(traceback.format_exc())
             except Exception:
@@ -893,17 +894,23 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
 
         # Build a normalized record and append to logs/listings.jsonl
         try:
+            setattr(io, "suppress_cancellation", True)
             safe_result: Dict[str, Any] = result if isinstance(result, dict) else {"ok": False, "error": "unknown"}
             amazon_url = data.get("URL") if isinstance(data, dict) else None
             title = (data.get("Title") or data.get("title") or None) if isinstance(data, dict) else None
             seller_note = (data.get("sellerNote") or "") if isinstance(data, dict) else ""
 
             ebay_link = None
-            status = None
-            response_text = None
-            if safe_result.get("item_id"):
-                ebay_link = f"https://www.ebay.co.uk/itm/{safe_result.get('item_id')}"
-            status = safe_result.get("status") or safe_result.get("ack") or safe_result.get("error") or str(safe_result.get("ok"))
+            is_cancelled = False
+            if safe_result.get("exception") and "Operation cancelled" in str(safe_result.get("exception")):
+                is_cancelled = True
+            elif safe_result.get("error") == "exception" and "Operation cancelled" in str(safe_result.get("exception")):
+                is_cancelled = True
+
+            if is_cancelled:
+                status = "Cancelled by user"
+            else:
+                status = safe_result.get("status") or safe_result.get("ack") or safe_result.get("error") or str(safe_result.get("ok"))
             response_text = safe_result.get("response") or None
 
             record = {
