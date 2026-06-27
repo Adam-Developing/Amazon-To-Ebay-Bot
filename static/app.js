@@ -130,7 +130,7 @@ function openExternal(url) {
         // Hints to the extension for where/how to open
         disposition: {
             position: 'nextToCurrent', // open right next to this UI tab
-            makeActive: true,          // focus the new tab
+            makeActive: false,         // keep focus on the current tab
             reuseIfSameUrl: false,     // avoid clobbering other windows
         },
         page: {
@@ -749,4 +749,3 @@ scheduleBulkPreview();
 
 refreshAll().catch(() => {});
 startUpdatesLoop();
-

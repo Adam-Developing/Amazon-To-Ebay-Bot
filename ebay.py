@@ -13,9 +13,13 @@ from CentralFunctions import (
     categoryID,
     get_item_specifics,
     set_seller_note,
+    get_seller_note,
+    increase_listing_quantity,
     find_minimum_price,
     map_one_dict,
 )
+from datetime import datetime, timezone
+from pathlib import Path
 
 load_dotenv()
 
@@ -70,6 +74,132 @@ def _detect_missing_field(message: str) -> str | None:
     return None
 
 
+def _parse_duplicate_listing_item_id(errors: list[dict]) -> str | None:
+    """Best-effort extraction of the *existing* eBay ItemID from a duplicate listing policy error."""
+    hay = "\n".join(
+        [str(e.get("short", "") or "") + "\n" + str(e.get("long", "") or "") for e in (errors or [])]
+    )
+    if not hay.strip():
+        return None
+
+    # Common pattern in the message: "... (287289972584)."
+    m = re.search(r"\((\d{9,15})\)", hay)
+    if m:
+        return m.group(1)
+
+    # Sometimes: "Item ID: 123..." or "itemId=123..."
+    m = re.search(r"\bitem\s*id\b\s*[:#]?\s*(\d{9,15})", hay, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    m = re.search(r"itemId=(\d{9,15})", hay, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # Fallback: pick a long-ish digit run near 'already have on eBay'
+    m = re.search(r"already have on ebay[^\d]*(\d{9,15})", hay, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _handle_duplicate_listing(
+    *,
+    io: IOBridge,
+    existing_item_id: str | None,
+    attempted_qty: int,
+    attempted_note: str,
+    user_token: str,
+    app_id: str,
+    dev_id: str,
+    cert_id: str,
+) -> Dict[str, Any]:
+    """Prompt for how to resolve a duplicate listing policy error.
+
+    Options:
+      - Skip (do nothing)
+      - Increase quantity only
+      - Append note only
+      - Increase quantity + append note
+    """
+    if not existing_item_id:
+        existing_item_id = io.prompt_text(
+            "Duplicate listing detected, but existing Item ID could not be parsed. Enter existing eBay Item ID (or blank to skip):",
+            default="",
+        ).strip()
+        if not existing_item_id:
+            return {"ok": True, "result": "duplicate_skipped", "existing_item_id": None}
+
+    # Ask once per duplicate
+    choice = io.prompt_choice(
+        f"Duplicate listing detected. Existing eBay ItemID: {existing_item_id}.\nChoose what to do:",
+        [
+            "Skip (do not list)",
+            "Increase existing listing quantity only",
+            "Append note to existing listing only",
+            "Increase quantity + append note",
+            "Cancel",
+        ],
+    )
+
+    if choice in (None, "Cancel"):
+        return {"ok": False, "error": "duplicate_cancelled", "existing_item_id": existing_item_id}
+    if choice == "Skip (do not list)":
+        io.log(f"Skipping duplicate listing; leaving existing item {existing_item_id} unchanged.")
+        return {"ok": True, "result": "duplicate_skipped", "existing_item_id": existing_item_id}
+
+    do_qty = choice in ("Increase existing listing quantity only", "Increase quantity + append note")
+    do_note = choice in ("Append note to existing listing only", "Increase quantity + append note")
+
+    success_qty = None
+    success_note = None
+    updated_quantity = None
+    updated_note = None
+
+    if do_qty:
+        ok, old_qty, new_qty = increase_listing_quantity(
+            existing_item_id,
+            attempted_qty,
+            user_token,
+            app_id,
+            dev_id,
+            cert_id,
+            io,
+        )
+        success_qty = ok
+        if ok:
+            updated_quantity = new_qty
+            io.log(f"Quantity increased for {existing_item_id}: {old_qty} -> {new_qty} (+{attempted_qty}).")
+        else:
+            io.log(
+                f"Could not automatically increase quantity for {existing_item_id} by {attempted_qty}. "
+                f"(This may be a variations listing, or quantity could not be fetched.)"
+            )
+
+    if do_note and attempted_note:
+        existing_note = get_seller_note(existing_item_id, user_token, app_id, dev_id, cert_id, io)
+        if existing_note:
+            updated_note = (existing_note.rstrip() + "\n" + attempted_note.strip()).strip()
+        else:
+            updated_note = attempted_note.strip()
+        success_note = set_seller_note(existing_item_id, updated_note, user_token, app_id, dev_id, cert_id, io)
+        # CentralFunctions.set_seller_note currently returns None; treat as success if no exception logged.
+        if success_note is None:
+            success_note = True
+
+    io.open_url(
+        f"https://www.ebay.co.uk/sl/list?mode=ReviseItem&itemId={existing_item_id}&ReturnURL=https%3A%2F%2Fwww.ebay.co.uk%2Fsh%2Flst%2Factive%3Foffset%3D0"
+    )
+
+    return {
+        "ok": True,
+        "result": "duplicate_handled",
+        "existing_item_id": existing_item_id,
+        "quantity_updated": bool(success_qty) if success_qty is not None else False,
+        "note_appended": bool(success_note) if success_note is not None else False,
+        "updated_quantity": updated_quantity,
+    }
+
+
 BANNED_PHRASES = [
     r"warranty",
     r"customer support",
@@ -107,23 +237,37 @@ def esc_xml(s: str) -> str:
     return (s or "").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
-def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
+def _list_on_ebay_impl(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     io.log("Preparing eBay listing payload…")
 
     amazon_open = False
 
     raw_title = data.get('Title', 'N/A')
-    if len(raw_title) > 80:
-        raw_title = raw_title[:80]
-    title_variable = esc_xml(raw_title)
+    # Preserve the full title for the HTML description, but keep a cropped
+    # version (80 chars) for the eBay <Title> field which has length limits.
+    full_title = raw_title or 'N/A'
+    if len(full_title) > 80:
+        cropped_title = full_title[:80]
+    else:
+        cropped_title = full_title
+    title_for_ebay = esc_xml(cropped_title)
+    title_for_description = esc_xml(full_title)
     tempDeal_variable = bool(data.get('tempDeal', False))
 
-    if title_variable == 'N/A':
+    if full_title == 'N/A':
         amazonUrl = data.get("URL", "Unknown")
         if amazonUrl != "Unknown":
             io.open_url(amazonUrl)
             amazon_open = True
-        title_variable = esc_xml(io.prompt_text('What is the title:', default="").strip())
+        entered_title = io.prompt_text('What is the title:', default="").strip()
+        full_title = entered_title or full_title
+        # update cropped/escaped versions
+        if len(full_title) > 80:
+            cropped_title = full_title[:80]
+        else:
+            cropped_title = full_title
+        title_for_ebay = esc_xml(cropped_title)
+        title_for_description = esc_xml(full_title)
 
     try:
         price_variable = float(data.get('Price', -1.0))
@@ -196,7 +340,8 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
 
     # --- HTML Description ---
     # --- HTML Description ---
-    html_description = f"<h1>{title_variable}</h1> <br>"
+    # Use the full title in the HTML description so it is not cropped there.
+    html_description = f"<h1>{title_for_description}</h1> <br>"
 
     product_overview = data.get('productOverview', {}) or {}
     if product_overview:
@@ -318,7 +463,8 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
 
     # Category & specifics discovery
     categoryTree = categoryTreeID(applicationToken)
-    catID = categoryID(applicationToken, categoryTree, title_variable)
+    # Use the full title when trying to detect the category (more context helps).
+    catID = categoryID(applicationToken, categoryTree, full_title)
     if not amazon_open:
         amazonUrl = data.get("URL", "Unknown")
         if amazonUrl != "Unknown":
@@ -360,7 +506,7 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     <eBayAuthToken>{user_token}</eBayAuthToken>
   </RequesterCredentials>
   <Item>
-    <Title>{title_variable}</Title>
+    <Title>{title_for_ebay}</Title>
     <Description><![CDATA[{html_description}]]></Description>
     <PrimaryCategory><CategoryID>{catID}</CategoryID></PrimaryCategory>
     <StartPrice>{price_variable:.2f}</StartPrice>
@@ -461,10 +607,15 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                 # Pre-scan errors to see if there's any actionable problem other than Best Offer/AutoPay conflicts.
                 # If so, we'll skip prompting about Best Offer and handle the other errors first.
                 has_other_actionable = False
+                has_duplicate_policy = False
                 for e in errors:
                     _short = e.get('short', '') or ''
                     _long = e.get('long', '') or ''
                     _actionable = _choose_error_message(_short, _long)
+                    if re.search(r"Duplicate listings policy", (_actionable + ' ' + _short + ' ' + _long), re.IGNORECASE):
+                        has_duplicate_policy = True
+                        has_other_actionable = True
+                        break
                     # Missing specific
                     if _detect_missing_field(_actionable):
                         has_other_actionable = True
@@ -479,6 +630,29 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                                  _long, re.IGNORECASE):
                         has_other_actionable = True
                         break
+
+                # If duplicate policy is present, handle it immediately (before Best Offer prompt)
+                if has_duplicate_policy:
+                    existing_item_id = _parse_duplicate_listing_item_id(errors)
+                    dup_result = _handle_duplicate_listing(
+                        io=io,
+                        existing_item_id=existing_item_id,
+                        attempted_qty=ebayQuantity,
+                        attempted_note=seller_note,
+                        user_token=user_token,
+                        app_id=app_id,
+                        dev_id=dev_id,
+                        cert_id=cert_id,
+                    )
+                    if dup_result.get("ok"):
+                        return {
+                            "ok": True,
+                            "ack": "DuplicateHandled",
+                            "duplicate": True,
+                            "existing_item_id": dup_result.get("existing_item_id"),
+                            **dup_result,
+                        }
+                    return {"ok": False, "ack": ack, "errors": errors, **dup_result}
 
                 # Try to detect field-specific errors like: "Type's value of \"...\" is too long. Enter a value of no more than 65 characters."
                 handled_any = False
@@ -538,6 +712,31 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                             io.log("User cancelled while resolving policy conflict.")
                             return {"ok": False, "ack": ack, "errors": errors}
 
+                    # Duplicate listings policy
+                    if re.search(r"Duplicate listings policy", actionable + ' ' + short + ' ' + long, re.IGNORECASE):
+                        existing_item_id = _parse_duplicate_listing_item_id(errors)
+                        dup_result = _handle_duplicate_listing(
+                            io=io,
+                            existing_item_id=existing_item_id,
+                            attempted_qty=ebayQuantity,
+                            attempted_note=seller_note,
+                            user_token=user_token,
+                            app_id=app_id,
+                            dev_id=dev_id,
+                            cert_id=cert_id,
+                        )
+                        # If user handled it (or skipped) we consider this item processed.
+                        # If user cancelled, treat as failure.
+                        if dup_result.get("ok"):
+                            return {
+                                "ok": True,
+                                "ack": "DuplicateHandled",
+                                "duplicate": True,
+                                "existing_item_id": dup_result.get("existing_item_id"),
+                                **dup_result,
+                            }
+                        return {"ok": False, "ack": ack, "errors": errors, **dup_result}
+
                     # Field length or value errors (use 'long' original matching as before)
                     m = re.search(r"(?P<field>[\w ]+)'s value of \"(?P<value>.+?)\" is too (?P<issue>long|short)", long,
                                   re.IGNORECASE)
@@ -564,7 +763,14 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                         # Assign the corrected value into the right place
                         fname_lower = field.lower()
                         if fname_lower == 'title':
-                            title_variable = esc_xml(new_val)
+                            # Update both the full/title shown in description and the cropped eBay title
+                            full_title = new_val
+                            if len(full_title) > 80:
+                                cropped_title = full_title[:80]
+                            else:
+                                cropped_title = full_title
+                            title_for_description = esc_xml(full_title)
+                            title_for_ebay = esc_xml(cropped_title)
                         elif fname_lower in ('price', 'startprice'):
                             try:
                                 price_variable = float(new_val)
@@ -625,3 +831,102 @@ def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
     # If we exhausted attempts
     io.log("Exceeded maximum retries attempting to correct eBay errors.")
     return {"ok": False, "error": "max_retries"}
+
+
+def list_on_ebay(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
+    """
+    Wrapper around the original listing implementation that captures all logs
+    emitted through `io.log` and saves a JSON-lines log record to
+    `logs/listings.jsonl` containing:
+      - timestamp
+      - source_amazon_url
+      - title
+      - ebay_link (if available)
+      - status
+      - ebay_response
+      - seller_note
+      - logs (list of timestamped log lines)
+    This wrapper restores `io.log` after the run and ensures the log file
+    directory exists.
+    """
+    logs_accum: list[str] = []
+    original_log = getattr(io, "log", lambda m: None)
+
+    # ensure 'result' is always defined for the finally block
+    result: Dict[str, Any] = {"ok": False, "error": "not_started"}
+
+    def _capture_log(msg: str) -> None:
+        try:
+            ts = datetime.now(timezone.utc).isoformat()
+            logs_accum.append(f"{ts} {msg}")
+        except Exception:
+            # ensure logging never breaks listing flow
+            pass
+        try:
+            original_log(msg)
+        except Exception:
+            pass
+
+    # Install capture
+    io.log = _capture_log
+
+    try:
+        try:
+            # Call the real implementation (renamed below)
+            result = _list_on_ebay_impl(data, io)
+        except Exception as exc:
+            # Ensure we capture unexpected exceptions and return a dict-shaped error
+            import traceback
+
+            try:
+                original_log(f"Exception during listing: {exc}")
+                original_log(traceback.format_exc())
+            except Exception:
+                pass
+            result = {"ok": False, "error": "exception", "exception": str(exc), "trace": traceback.format_exc()}
+    finally:
+        # Restore original log function
+        try:
+            io.log = original_log
+        except Exception:
+            pass
+
+        # Build a normalized record and append to logs/listings.jsonl
+        try:
+            safe_result: Dict[str, Any] = result if isinstance(result, dict) else {"ok": False, "error": "unknown"}
+            amazon_url = data.get("URL") if isinstance(data, dict) else None
+            title = (data.get("Title") or data.get("title") or None) if isinstance(data, dict) else None
+            seller_note = (data.get("sellerNote") or "") if isinstance(data, dict) else ""
+
+            ebay_link = None
+            status = None
+            response_text = None
+            if safe_result.get("item_id"):
+                ebay_link = f"https://www.ebay.co.uk/itm/{safe_result.get('item_id')}"
+            status = safe_result.get("status") or safe_result.get("ack") or safe_result.get("error") or str(safe_result.get("ok"))
+            response_text = safe_result.get("response") or None
+
+            record = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "source_amazon_url": amazon_url,
+                "title": title,
+                "ebay_link": ebay_link,
+                "status": status,
+                "ebay_response": response_text,
+                "seller_note": seller_note,
+                "logs": logs_accum,
+            }
+
+            logs_dir = Path("logs")
+            logs_dir.mkdir(exist_ok=True)
+            log_file = logs_dir / "listings.jsonl"
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:
+            try:
+                original_log(f"Failed saving listing log: {e}")
+            except Exception:
+                pass
+
+    return result
+

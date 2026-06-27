@@ -1,15 +1,30 @@
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== 'amazonToEbay_open_url_from_content') return;
   const targetUrl = msg.url;
-  // Determine the sender tab index; open a new tab to the right of it
-  chrome.tabs.get(sender.tab.id, (tab) => {
-    const createProps = { url: targetUrl, index: tab.index + 1, active: false };
-    chrome.tabs.create(createProps, () => {
-      // Do NOT focus the new tab (active: false ensures this)
-      // Send acknowledgement back to content script
-      sendResponse({ ok: true });
-    });
-  });
+  const sourceTab = sender.tab;
+  if (!sourceTab || typeof sourceTab.id !== 'number') {
+    sendResponse({ ok: false, error: 'Missing sender tab context' });
+    return;
+  }
+
+  // Open the tab in the same window without activating it.
+  chrome.tabs.create(
+    {
+      url: targetUrl,
+      windowId: sourceTab.windowId,
+      index: sourceTab.index + 1,
+      active: false,
+      openerTabId: sourceTab.id,
+    },
+    (createdTab) => {
+      if (chrome.runtime.lastError) {
+        sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+
+      sendResponse({ ok: true, tabId: createdTab && createdTab.id });
+    }
+  );
   // Indicate we'll call sendResponse asynchronously
   return true;
 });

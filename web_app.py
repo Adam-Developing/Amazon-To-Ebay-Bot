@@ -63,6 +63,10 @@ STATE: Dict[str, Any] = {
 LOG_ENTRIES: List[Dict[str, Any]] = []
 LOG_COUNTER = 0
 
+# Human-readable Activity Log file (separate from structured listing logs in logs/listings.jsonl)
+ACTIVITY_LOG_DIR = os.getenv("ACTIVITY_LOG_DIR", "logs")
+ACTIVITY_LOG_TXT = os.getenv("ACTIVITY_LOG_TXT", os.path.join(ACTIVITY_LOG_DIR, "activity_log.txt"))
+
 PROMPT_EVENTS: Dict[int, Dict[str, Any]] = {}
 ACTIVE_PROMPT: Optional[Dict[str, Any]] = None
 PROMPT_COUNTER = 0
@@ -161,13 +165,24 @@ def _update_bulk_item(index: int, status: str, message: str = "") -> None:
 
 def _append_log(msg: str) -> None:
     global LOG_COUNTER
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    entry = f"[{timestamp}] {msg}"
+    # Keep the UI message format stable (HH:MM:SS) while writing a richer timestamp to disk.
+    ui_timestamp = datetime.now().strftime("%H:%M:%S")
+    entry = f"[{ui_timestamp}] {msg}"
     with LOG_LOCK:
         LOG_COUNTER += 1
         LOG_ENTRIES.append({"id": LOG_COUNTER, "message": entry})
         if len(LOG_ENTRIES) > MAX_LOG_ENTRIES:
             LOG_ENTRIES[: len(LOG_ENTRIES) - MAX_LOG_ENTRIES] = []
+
+        # Best-effort persistence to a txt file for the Activity Log.
+        try:
+            os.makedirs(ACTIVITY_LOG_DIR, exist_ok=True)
+            file_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(ACTIVITY_LOG_TXT, "a", encoding="utf-8") as handle:
+                handle.write(f"{file_timestamp} | {msg}\n")
+        except OSError:
+            # Never let file logging break the UI.
+            pass
     _notify_update()
 
 

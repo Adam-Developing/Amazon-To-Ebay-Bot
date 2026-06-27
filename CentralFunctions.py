@@ -369,6 +369,230 @@ def set_seller_note(item_id, note, user_token, app_id, dev_id, cert_id, io: IOBr
         io.log(f"An unexpected error occurred while setting the seller note: {e}")
 
 
+def get_seller_note(item_id, user_token, app_id, dev_id, cert_id, io: IOBridge | None = None) -> str:
+    """Fetch the current private seller note for an item using GetUserNotes.
+
+    Returns an empty string if no note exists or if the call fails.
+    """
+    io = io or IOBridge()
+
+    endpoint = "https://api.ebay.com/ws/api.dll"
+    headers = {
+        "X-EBAY-API-CALL-NAME": "GetUserNotes",
+        "X-EBAY-API-SITEID": "3",
+        "X-EBAY-API-APP-NAME": app_id,
+        "X-EBAY-API-DEV-NAME": dev_id,
+        "X-EBAY-API-CERT-NAME": cert_id,
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "Content-Type": "text/xml",
+    }
+
+    xml_body = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+    <GetUserNotesRequest xmlns=\"urn:ebay:apis:eBLBaseComponents\">
+      <RequesterCredentials>
+        <eBayAuthToken>{user_token}</eBayAuthToken>
+      </RequesterCredentials>
+      <ItemID>{item_id}</ItemID>
+      <IncludePrivateNotes>true</IncludePrivateNotes>
+      <DetailLevel>ReturnAll</DetailLevel>
+    </GetUserNotesRequest>
+    """
+
+    try:
+        response = requests.post(endpoint, data=xml_body.encode("utf-8"), headers=headers)
+        tree = ET.fromstring(response.content)
+        namespace = '{urn:ebay:apis:eBLBaseComponents}'
+        ack_el = tree.find(f'{namespace}Ack')
+        ack = ack_el.text if ack_el is not None else "Unknown"
+        if ack not in ['Success', 'Warning']:
+            return ""
+
+        # Try to find the UserNote entry matching this ItemID.
+        # eBay may return multiple notes, so we must not just grab the first NoteText.
+        for note in tree.findall(f'.//{namespace}UserNote'):
+            nid_el = note.find(f'{namespace}ItemID')
+            if nid_el is not None and (nid_el.text or '').strip() == str(item_id):
+                nt_el = note.find(f'{namespace}NoteText')
+                return (nt_el.text or "").strip() if nt_el is not None else ""
+
+        # Fallback: some responses may include a single NoteText without wrapping UserNote.
+        note_el = tree.find(f'.//{namespace}NoteText')
+        return (note_el.text or "").strip() if note_el is not None else ""
+    except Exception as e:
+        io.log(f"Failed to fetch seller note for Item ID {item_id}: {e}")
+        return ""
+
+
+def revise_inventory_quantity(item_id: str, new_quantity: int, user_token, app_id, dev_id, cert_id,
+                              io: IOBridge | None = None) -> bool:
+    """Set a listing's available quantity using ReviseInventoryStatus.
+
+    Returns True on Success/Warning.
+    """
+    io = io or IOBridge()
+    if not item_id:
+        return False
+    try:
+        new_quantity = int(new_quantity)
+    except Exception:
+        return False
+    if new_quantity < 0:
+        return False
+
+    endpoint = "https://api.ebay.com/ws/api.dll"
+    headers = {
+        "X-EBAY-API-CALL-NAME": "ReviseInventoryStatus",
+        "X-EBAY-API-SITEID": "3",
+        "X-EBAY-API-APP-NAME": app_id,
+        "X-EBAY-API-DEV-NAME": dev_id,
+        "X-EBAY-API-CERT-NAME": cert_id,
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "Content-Type": "text/xml",
+    }
+
+    xml_body = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+    <ReviseInventoryStatusRequest xmlns=\"urn:ebay:apis:eBLBaseComponents\">
+      <RequesterCredentials>
+        <eBayAuthToken>{user_token}</eBayAuthToken>
+      </RequesterCredentials>
+      <InventoryStatus>
+        <ItemID>{item_id}</ItemID>
+        <Quantity>{new_quantity}</Quantity>
+      </InventoryStatus>
+    </ReviseInventoryStatusRequest>
+    """
+
+    try:
+        io.log(f"Revising inventory quantity for Item ID {item_id} to {new_quantity}…")
+        response = requests.post(endpoint, data=xml_body.encode("utf-8"), headers=headers)
+        tree = ET.fromstring(response.content)
+        namespace = '{urn:ebay:apis:eBLBaseComponents}'
+        ack_el = tree.find(f'{namespace}Ack')
+        ack = ack_el.text if ack_el is not None else "Unknown"
+        if ack in ['Success', 'Warning']:
+            io.log("Successfully revised inventory quantity.")
+            return True
+        io.log("Failed to revise inventory quantity.")
+        for error in tree.findall(f'{namespace}Errors'):
+            short_message_el = error.find(f'{namespace}ShortMessage')
+            long_message_el = error.find(f'{namespace}LongMessage')
+            short_message = short_message_el.text if short_message_el is not None else ""
+            long_message = long_message_el.text if long_message_el is not None else ""
+            if short_message or long_message:
+                io.log(f"Error: {short_message} - {long_message}")
+        return False
+    except Exception as e:
+        io.log(f"An unexpected error occurred while revising inventory quantity: {e}")
+        return False
+
+
+def get_item_available_quantity(item_id: str, user_token, app_id, dev_id, cert_id, io: IOBridge | None = None) -> int | None:
+    """Fetch the current best-effort available quantity for a listing.
+
+    Uses Trading API GetItem, and computes available quantity as:
+      max(0, Quantity - SellingStatus.QuantitySold)
+
+    Returns None if it can't be determined.
+    NOTE: For multi-variation listings, this returns the top-level Quantity (if present),
+    which may not reflect per-variation inventory. In that case we return None so the caller
+    can decide how to proceed.
+    """
+    io = io or IOBridge()
+    if not item_id:
+        return None
+
+    endpoint = "https://api.ebay.com/ws/api.dll"
+    headers = {
+        "X-EBAY-API-CALL-NAME": "GetItem",
+        "X-EBAY-API-SITEID": "3",
+        "X-EBAY-API-APP-NAME": app_id,
+        "X-EBAY-API-DEV-NAME": dev_id,
+        "X-EBAY-API-CERT-NAME": cert_id,
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "Content-Type": "text/xml",
+    }
+
+    xml_body = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+    <GetItemRequest xmlns=\"urn:ebay:apis:eBLBaseComponents\">
+      <RequesterCredentials>
+        <eBayAuthToken>{user_token}</eBayAuthToken>
+      </RequesterCredentials>
+      <ItemID>{item_id}</ItemID>
+      <DetailLevel>ReturnAll</DetailLevel>
+    </GetItemRequest>
+    """
+
+    try:
+        io.log(f"Fetching current quantity for Item ID {item_id}…")
+        response = requests.post(endpoint, data=xml_body.encode("utf-8"), headers=headers)
+        tree = ET.fromstring(response.content)
+        namespace = '{urn:ebay:apis:eBLBaseComponents}'
+        ack_el = tree.find(f'{namespace}Ack')
+        ack = ack_el.text if ack_el is not None else "Unknown"
+        if ack not in ['Success', 'Warning']:
+            for error in tree.findall(f'{namespace}Errors'):
+                short_message_el = error.find(f'{namespace}ShortMessage')
+                long_message_el = error.find(f'{namespace}LongMessage')
+                short_message = short_message_el.text if short_message_el is not None else ""
+                long_message = long_message_el.text if long_message_el is not None else ""
+                if short_message or long_message:
+                    io.log(f"GetItem error: {short_message} - {long_message}")
+            return None
+
+        # If variations exist, don't guess which variation to adjust.
+        variations_el = tree.find(f'.//{namespace}Variations')
+        if variations_el is not None and list(variations_el):
+            io.log("Item appears to have variations; skipping auto quantity increase (needs variation match).")
+            return None
+
+        qty_el = tree.find(f'.//{namespace}Quantity')
+        sold_el = tree.find(f'.//{namespace}SellingStatus/{namespace}QuantitySold')
+
+        if qty_el is None or qty_el.text is None:
+            return None
+
+        try:
+            qty = int(qty_el.text)
+        except Exception:
+            return None
+
+        sold = 0
+        if sold_el is not None and sold_el.text:
+            try:
+                sold = int(sold_el.text)
+            except Exception:
+                sold = 0
+
+        return max(0, qty - sold)
+    except Exception as e:
+        io.log(f"An unexpected error occurred while fetching item quantity: {e}")
+        return None
+
+
+def increase_listing_quantity(item_id: str, delta_qty: int, user_token, app_id, dev_id, cert_id,
+                             io: IOBridge | None = None) -> tuple[bool, int | None, int | None]:
+    """Increase an existing listing's available quantity by delta_qty.
+
+    Returns (success, old_available_qty, new_available_qty).
+
+    If current quantity cannot be determined, returns (False, None, None).
+    """
+    io = io or IOBridge()
+    try:
+        delta_qty = int(delta_qty)
+    except Exception:
+        return False, None, None
+    if delta_qty <= 0:
+        return False, None, None
+
+    current_avail = get_item_available_quantity(item_id, user_token, app_id, dev_id, cert_id, io)
+    if current_avail is None:
+        return False, None, None
+    new_avail = current_avail + delta_qty
+    ok = revise_inventory_quantity(item_id, new_avail, user_token, app_id, dev_id, cert_id, io)
+    return ok, current_avail, new_avail
+
+
 FIXED_FEE = float(os.getenv("EBAY_FIXED_FEE", "0.72"))
 
 
