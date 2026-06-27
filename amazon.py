@@ -267,6 +267,147 @@ def get_whats_in_the_box(page) -> list[str]:
     except Exception:
         return []
 
+def get_product_description(page) -> str:
+    """Extract and clean the standard product description from the page,
+    excluding any A+ content/From the manufacturer sections.
+    """
+    try:
+        desc_el = None
+        
+        # 1. First look for `#aplus` or `#aplus_feature_div`
+        aplus_div = page.find(id='aplus_feature_div') or page.find(id='aplus')
+        if aplus_div:
+            # Check if any header inside it is "Product Description"
+            headers = aplus_div.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+            has_product_description_header = False
+            for h in headers:
+                if "product description" in h.get_text(strip=True).lower():
+                    has_product_description_header = True
+                    break
+            if has_product_description_header:
+                desc_el = aplus_div.find(id='aplus') or aplus_div
+                
+        # 2. Fallback to standard productDescription
+        if not desc_el:
+            desc_el = page.find(id='productDescription')
+            
+        # 3. Fallback to bookDescription
+        if not desc_el:
+            book_div = page.find(id='bookDescription_feature_div')
+            if book_div:
+                desc_el = book_div.find('div', class_='a-expander-content') or book_div
+                
+        # Check if empty or only comments (or not found)
+        if desc_el:
+            text_content = desc_el.get_text(strip=True)
+            if not text_content or text_content.startswith("<!--"):
+                pqv_el = page.find(id='pqv-description')
+                if pqv_el and pqv_el.get_text(strip=True):
+                    desc_el = pqv_el
+        else:
+            pqv_el = page.find(id='pqv-description')
+            if pqv_el and pqv_el.get_text(strip=True):
+                desc_el = pqv_el
+
+        if not desc_el:
+            return ""
+
+        import copy
+        from bs4 import Comment
+
+        el_copy = copy.copy(desc_el)
+
+        # Remove comments
+        for comment in list(el_copy.find_all(string=lambda t: isinstance(t, Comment))):
+            comment.extract()
+
+        # Extract (delete entirely) style, script, and noscript tags
+        for tag in list(el_copy.find_all(['style', 'script', 'noscript'])):
+            tag.extract()
+
+        # Format aplus-carousel-actions properly (convert navigation tabs to styled horizontal bar)
+        for actions_div in list(el_copy.find_all(class_=lambda x: x and 'aplus-carousel-actions' in x)):
+            labels = []
+            for btn in actions_div.find_all(class_=lambda x: x and ('carousel-label' in x or 'accent2' in x)):
+                txt = btn.get_text(strip=True)
+                if txt and txt not in labels:
+                    labels.append(txt)
+            if not labels:
+                for btn in actions_div.find_all('button'):
+                    txt = btn.get_text(strip=True)
+                    if txt and txt not in labels:
+                        labels.append(txt)
+            if labels:
+                new_bar = page.new_tag('p')
+                new_bar['style'] = "background-color: #111; color: #fff; padding: 12px 20px; text-align: center; margin: 15px 0; border-radius: 4px;"
+                for label in labels:
+                    span = page.new_tag('span')
+                    span['style'] = "margin: 0 15px; display: inline-block; font-weight: bold; font-size: 16px; color: #fff; font-family: Arial, sans-serif;"
+                    span.string = label
+                    new_bar.append(span)
+                actions_div.replace_with(new_bar)
+            else:
+                actions_div.extract()
+
+        # Extract (delete entirely) comparison charts, video widgets, and popovers
+        for tag in list(el_copy.find_all(True)):
+            classes = tag.get('class') or []
+            classes_str = " ".join(classes).lower()
+            id_val = (tag.get('id') or '').lower()
+            if any(term in classes_str or term in id_val for term in ['comparison', 'video', 'player', 'popover', 'vjs-', 'apm-sidewide']):
+                tag.extract()
+
+        # Extract carousel control buttons and pagination elements to avoid leaking next/prev labels, while keeping the slide images
+        for tag in list(el_copy.find_all(True)):
+            classes = tag.get('class') or []
+            if any(c in classes for c in [
+                'a-carousel-left', 'a-carousel-right', 
+                'aplus-pagination-wrapper', 'aplus-carousel-nav',
+                'a-carousel-goto-prevpage', 'a-carousel-goto-nextpage',
+                'aplus-pagination-dots'
+            ]):
+                tag.extract()
+
+        # Unwrap any list tags that belong to carousels to avoid ordered/unordered numbers/bullets next to slides
+        for tag in list(el_copy.find_all(['ol', 'ul', 'li'])):
+            classes = tag.get('class') or []
+            classes_str = " ".join(classes).lower()
+            if 'carousel' in classes_str:
+                tag.unwrap()
+
+        allowed_tags = {'p', 'br', 'b', 'i', 'strong', 'em', 'span', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img'}
+
+        # Unwrap any non-allowed tags
+        for tag in list(el_copy.find_all(True)):
+            if tag.name not in allowed_tags:
+                tag.unwrap()
+            else:
+                if tag.name == 'img':
+                    # Keep only src and alt (handle lazy-loaded images)
+                    src_val = tag.get('src') or ''
+                    if not src_val or 'grey-pixel.gif' in src_val or 'spacer.gif' in src_val:
+                        real_src = tag.get('data-src') or tag.get('data-lazy-src') or tag.get('data-src-la') or tag.get('data-a-lazy-src')
+                        if real_src:
+                            src_val = real_src
+                    tag.attrs = {'src': src_val, 'alt': tag.get('alt') or ''}
+                elif tag.name in ['p', 'span'] and tag.get('style') and ('background-color' in tag.get('style') or 'margin' in tag.get('style')):
+                    # Keep style for our custom styled tab bar element
+                    pass
+                else:
+                    tag.attrs = {}
+
+        cleaned_html = "".join([str(c) for c in el_copy.contents]).strip()
+
+        # Check if the extracted text content is empty (excluding comments/whitespace)
+        temp_soup = BeautifulSoup(cleaned_html, 'html.parser')
+        if not temp_soup.get_text(strip=True):
+            return ""
+
+        return cleaned_html
+    except Exception:
+        return ""
+
+
 # Public API
 
 def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, custom_specifics: Optional[Dict[str, str]] = None, io: Optional[IOBridge] = None) -> Dict[str, Any]:
@@ -327,6 +468,7 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
     prod_info_dict['whatIsInTheBox'] = get_whats_in_the_box(page)
 
     prod_info_dict['importantInformation'] = handle_html_content(page, 'important-information')
+    prod_info_dict['description'] = get_product_description(page)
 
     title_element = page.find(id='productTitle')
     raw_title = getattr(title_element, 'text', '') if title_element else ""

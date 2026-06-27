@@ -233,6 +233,52 @@ def _sanitize_text_block(text: str) -> str:
     return " ".join(kept).strip()
 
 
+def sanitize_description_html(html_str: str) -> str:
+    if not html_str:
+        return ""
+    try:
+        from bs4 import BeautifulSoup, NavigableString
+        soup = BeautifulSoup(html_str, "html.parser")
+        
+        # We find all NavigableString elements
+        for text_node in list(soup.find_all(string=True)):
+            # Ignore comments or text node that is just whitespace
+            if not isinstance(text_node, NavigableString) or not text_node.strip():
+                continue
+            
+            # Check if the text matches the banned regex
+            if _BANNED_RE.search(text_node):
+                # Split text into sentences
+                parts = _SENTENCE_SPLIT_RE.split(text_node)
+                kept = [s for s in parts if not _BANNED_RE.search(s)]
+                # Rejoin the sentences
+                new_text = " ".join(kept).strip()
+                # If the kept text is empty, we can extract (remove) the text node
+                if not new_text:
+                    text_node.extract()
+                else:
+                    # Replace the text of the node
+                    text_node.replace_with(new_text)
+                    
+        # Clean up empty parent tags if they ended up empty after stripping text
+        # e.g., if a <span> or <p> has no children/text left, but keep tags wrapping media/br
+        for _ in range(3):
+            for tag in list(soup.find_all(True)):
+                if tag.name in ['br', 'img']:
+                    continue
+                if not tag.contents:
+                    tag.extract()
+                    continue
+                # If tag contains only whitespace text nodes (no visible content, no images, no brs)
+                has_visible_media = tag.find(['img', 'br']) is not None
+                if not has_visible_media and not tag.get_text(strip=True):
+                    tag.extract()
+
+        return "".join([str(c) for c in soup.contents]).strip()
+    except Exception:
+        return html_str
+
+
 def esc_xml(s: str) -> str:
     return (s or "").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
@@ -376,6 +422,28 @@ def _list_on_ebay_impl(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                 html_description += f'<li>{esc_xml(item)}</li>'
             html_description += '</ul><br>'
 
+    # Product description
+    product_desc_html = ""
+    amazon_description = data.get('description', '') or ''
+    if amazon_description:
+        safe_description = sanitize_description_html(amazon_description)
+        if safe_description:
+            from bs4 import BeautifulSoup
+            try:
+                temp_soup = BeautifulSoup(safe_description, 'html.parser')
+                has_desc_header = False
+                for h in temp_soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+                    h_text = h.get_text(strip=True).lower()
+                    if h_text in ['description', 'product description']:
+                        has_desc_header = True
+                        break
+            except Exception:
+                has_desc_header = False
+
+            if not has_desc_header:
+                product_desc_html += '<h3>Product Description</h3>'
+            product_desc_html += f'{safe_description}<br><br>'
+
     # Prefer unified Product details; fallback to legacy prodDetails
     product_details = data.get('Product details', {}) or {}
     prod_details = data.get('prodDetails', {}) or {}
@@ -445,6 +513,9 @@ def _list_on_ebay_impl(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
                 f'<td style="border: none;">{esc_xml(safe_val)}</td></tr>'
             )
         html_description += '</table><br>'
+
+    if product_desc_html:
+        html_description += product_desc_html
 
     # --- Credentials & tokens ---
     app_id = os.getenv("EBAY_CLIENT_ID")
