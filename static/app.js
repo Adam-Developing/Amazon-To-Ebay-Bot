@@ -37,6 +37,7 @@ let updateRetryDelay = 0;
 let activePromptId = null;
 let lastPromptType = null;
 let bulkPreviewTimeout = null;
+let bulkPreviewGeneration = 0;
 let updatesAbortController = null;
 let cancelPressed = false;
 
@@ -277,6 +278,11 @@ async function submitPrompt(value) {
 
 // Helper: clean up bulk UI after cancel
 function clearBulkItemsUI() {
+    bulkPreviewGeneration += 1;
+    if (bulkPreviewTimeout) {
+        clearTimeout(bulkPreviewTimeout);
+        bulkPreviewTimeout = null;
+    }
     if (elements.bulkItems) {
         elements.bulkItems.innerHTML = "";
     }
@@ -778,15 +784,23 @@ function scheduleBulkPreview() {
     if (bulkPreviewTimeout) {
         clearTimeout(bulkPreviewTimeout);
     }
+    bulkPreviewGeneration += 1;
+    const previewGeneration = bulkPreviewGeneration;
     bulkPreviewTimeout = setTimeout(async () => {
         try {
             const result = await postJson("/api/bulk/preview", { text: elements.bulkText.value });
+            if (previewGeneration !== bulkPreviewGeneration) {
+                return;
+            }
             if (result.response.ok) {
                 renderBulkItems(result.data.items || []);
             } else if (elements.bulkMeta) {
                 elements.bulkMeta.textContent = result.data.error || "Unable to preview bulk items.";
             }
         } catch (error) {
+            if (previewGeneration !== bulkPreviewGeneration) {
+                return;
+            }
             if (elements.bulkMeta) {
                 elements.bulkMeta.textContent = "Unable to preview bulk items.";
             }

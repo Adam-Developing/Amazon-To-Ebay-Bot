@@ -365,7 +365,7 @@ def _list_on_ebay_impl(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
         # Price is small — ask how much to take off (original behavior).
         # Include the sell price suggestion in brackets (formatted to 2 decimals).
         suggested = f"{price_variable:.2f}"
-        prompt = f"Price is less than 6, what should we take off? (Currently at: £{suggested})"
+        prompt = f"Price is less than £6, what should we take off? (Currently at: £{suggested})"
         off = io.prompt_text(prompt, default="0").strip()
         try:
             price_variable -= float(off)

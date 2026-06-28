@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from flask import Flask, jsonify, render_template, request
+from requests.exceptions import RequestException
 
 from amazon import scrape_amazon
 from bulk_parser import parse_bulk_items
@@ -544,6 +545,9 @@ def api_scrape():
                     json.dump(product, handle, indent=2)
             except (OSError, TypeError, ValueError) as exc:
                 WEB_IO.log(f"Failed to write product.json: {exc}")
+        except RequestException as exc:
+            WEB_IO.log(f"Scrape failed: {exc}")
+            _set_status("Attention", "Failed to scrape Amazon product. Check your network connection.", "error")
         except OperationCancelled:
             _set_status("Attention", "Scraping cancelled by user.", "warning")
             _append_log("Operation cancelled by user.")
@@ -583,6 +587,9 @@ def api_list():
             else:
                 WEB_IO.log(f"Listing failed: {result}")
                 _set_status("Attention", "Listing failed. See log for details.", "error")
+        except RequestException as exc:
+            WEB_IO.log(f"Listing failed: {exc}")
+            _set_status("Attention", "Failed to list on eBay. Check your network connection.", "error")
         except OperationCancelled:
             _set_status("Attention", "Listing cancelled by user.", "warning")
             _append_log("Operation cancelled by user.")
@@ -648,13 +655,19 @@ def api_bulk_process():
                 _set_status("Working", f"Processing item {display_index} of {total_items}.", "working")
                 _update_bulk_item(index, "Scraping", "Scraping Amazon listing.")
                 WEB_IO.log(f"=== Processing Item {display_index}/{total_items} ===")
-                product = scrape_amazon(
-                    item.get("url", ""),
-                    note=item.get("note", ""),
-                    quantity=item.get("quantity", 1),
-                    custom_specifics=item.get("custom_specifics", {}),
-                    io=WEB_IO,
-                )
+                try:
+                    product = scrape_amazon(
+                        item.get("url", ""),
+                        note=item.get("note", ""),
+                        quantity=item.get("quantity", 1),
+                        custom_specifics=item.get("custom_specifics", {}),
+                        io=WEB_IO,
+                    )
+                except RequestException as exc:
+                    message = f"Scrape failed: {exc}"
+                    WEB_IO.log(message)
+                    _update_bulk_item(index, "Failed", message)
+                    continue
                 if not product:
                     WEB_IO.log(f"Skipping item {display_index} due to scraping failure.")
                     _update_bulk_item(index, "Failed", "Scrape failed.")
@@ -666,7 +679,13 @@ def api_bulk_process():
                 ) as handle:
                     json.dump(product, handle, indent=2)
                 _update_bulk_item(index, "Listing", "Listing on eBay.")
-                result = list_on_ebay(product, WEB_IO)
+                try:
+                    result = list_on_ebay(product, WEB_IO)
+                except RequestException as exc:
+                    message = f"Listing failed: {exc}"
+                    WEB_IO.log(message)
+                    _update_bulk_item(index, "Failed", message)
+                    continue
                 if result.get("ok"):
                     processed_count += 1
                     _update_bulk_item(
