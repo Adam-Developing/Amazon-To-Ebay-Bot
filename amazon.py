@@ -3,6 +3,7 @@ from __future__ import annotations
 import requests
 import json
 import re
+from html import unescape
 from typing import Dict, Any, Optional
 from bs4 import BeautifulSoup
 from ui_bridge import IOBridge
@@ -155,57 +156,126 @@ def get_product_facts_list(page, id='productFactsDesktopExpander') -> list[str]:
     except Exception:
         return items
 
+def _normalise_amazon_image_url(value: Any) -> str:
+    """Return a stable, full-size Amazon media URL suitable for eBay."""
+    if not isinstance(value, str):
+        return ""
+
+    url = unescape(value).strip().replace(r"\/", "/")
+    if url.startswith("//"):
+        url = f"https:{url}"
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        return ""
+    if "grey-pixel" in url.lower() or "spacer.gif" in url.lower():
+        return ""
+
+    # Amazon inserts resize/crop instructions between the image id and suffix,
+    # e.g. IMAGE._AC_SL1500_.jpg. Removing them requests the original image.
+    url = re.sub(
+        r"\._[^/?]*_\.(?=[a-z0-9]{2,5}(?:[?#]|$))",
+        ".",
+        url,
+        flags=re.IGNORECASE,
+    )
+    return url
+
+
 def get_image_urls(page):
-    # 1. Find the specific script tag containing the image data
-    # We look for a script tag that contains the string 'ImageBlockATF'
-    script_tag = page.find('script', string=re.compile(r'ImageBlockATF'))
+    """Extract Amazon's product-gallery images, preferring original-size URLs."""
+    urls = []
+    seen = set()
 
-    if not script_tag:
-        return []
+    def add_url(value: Any) -> None:
+        url = _normalise_amazon_image_url(value)
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
 
-    script_content = script_tag.string
-    if not script_content:
-        return []
+    def add_tag_urls(tag) -> None:
+        # data-old-hires is the most reliable current Amazon gallery field.
+        add_url(tag.get("data-old-hires"))
 
-    # 2. Extract the object inside 'var data = { ... };'
-    match = re.search(r"var\s+data\s*=\s*({.*?});", script_content, re.DOTALL)
-    if not match:
-        return []
+        dynamic_images = tag.get("data-a-dynamic-image")
+        if isinstance(dynamic_images, str) and dynamic_images.strip():
+            try:
+                candidates = json.loads(unescape(dynamic_images))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                candidates = {}
+            if isinstance(candidates, dict):
+                # Start with the largest rendition. Normalisation/deduplication
+                # collapses resized variants of the same physical image.
+                def dimensions(entry):
+                    size = entry[1]
+                    if isinstance(size, (list, tuple)) and len(size) >= 2:
+                        try:
+                            return int(size[0]) * int(size[1])
+                        except (TypeError, ValueError):
+                            pass
+                    return 0
 
-    js_obj = match.group(1)
+                for candidate, _ in sorted(
+                    candidates.items(), key=dimensions, reverse=True
+                ):
+                    add_url(candidate)
 
-    # 3. Clean the string to make it valid JSON
-    # Remove JavaScript comments (////// ...)
-    js_obj = re.sub(r"(?<!https:)(?<!http:)//.*", "", js_obj)
+        for attr in ("src", "data-src", "data-lazy-src", "data-a-lazy-src"):
+            add_url(tag.get(attr))
 
-    # Replace single quotes with double quotes for keys and values
-    # Regex handles keys: 'key': -> "key":
-    js_obj = re.sub(r"'(.*?)'\s*:", r'"\1":', js_obj)
-    # Remaining single quotes for values: 'value' -> "value"
-    js_obj = js_obj.replace("'", '"')
-
-    # 4. Handle JS-specific values
-    js_obj = re.sub(r"Date\.now\(\)", "null", js_obj)
-    js_obj = js_obj.replace("false", "false").replace("true", "true").replace("null", "null")
-
-    # 5. Clean up trailing commas (common in JS, illegal in JSON)
-    js_obj = re.sub(r",\s*}", "}", js_obj)
-    js_obj = re.sub(r",\s*]", "]", js_obj)
-
+    # Current desktop/mobile markup. Some alternate images are lazy-loaded
+    # divs, not img tags, so select by data attribute as well.
     try:
-        data_obj = json.loads(js_obj)
-        initial_images = data_obj.get('colorImages', {}).get('initial', [])
-        urls = []
-        for img in initial_images:
-            if not isinstance(img, dict):
-                continue
-            hi_res = img.get('hiRes')
-            if isinstance(hi_res, str) and hi_res.strip():
-                urls.append(hi_res.strip())
+        gallery_tags = page.select(
+            "#imageBlock [data-old-hires], "
+            "#imageBlock [data-a-dynamic-image], "
+            "#altImages [data-old-hires], "
+            "#altImages [data-a-dynamic-image], "
+            "#landingImage"
+        )
+    except Exception:
+        gallery_tags = []
+
+    for tag in gallery_tags:
+        add_tag_urls(tag)
+    if urls:
         return urls
-    except json.JSONDecodeError as e:
-        print(f"JSON decoding error: {e}")
-        return []
+
+    # Legacy pages keep the gallery in an ImageBlockATF script. Extract the
+    # URL fields directly because the surrounding object is JavaScript rather
+    # than valid JSON (and commonly wraps the array in A.$.parseJSON()).
+    try:
+        scripts = page.find_all("script")
+    except Exception:
+        scripts = []
+
+    image_field_re = re.compile(
+        r"[\"'](?:hiRes|large)[\"']\s*:\s*"
+        r"(?P<quote>[\"'])(?P<url>.*?)(?P=quote)",
+        re.IGNORECASE,
+    )
+    for script in scripts:
+        content = getattr(script, "string", None)
+        if content is None:
+            try:
+                content = script.get_text()
+            except Exception:
+                content = ""
+        if not content or "ImageBlockATF" not in content:
+            continue
+        for match in image_field_re.finditer(content):
+            add_url(match.group("url"))
+    if urls:
+        return urls
+
+    # A+ content is not the product gallery, but is a better final fallback
+    # than sending an eBay AddItem request without any photo at all.
+    try:
+        aplus_tags = page.select("#aplus img, #aplus_feature_div img")
+    except Exception:
+        aplus_tags = []
+    for tag in aplus_tags:
+        add_tag_urls(tag)
+
+    return urls
 
 
 def get_info(page, ids=None):
@@ -530,6 +600,14 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
     if details:
         prod_info_dict['detailBullets'] = details
     prod_info_dict['imageUrls'] = get_image_urls(page)
+    image_count = len(prod_info_dict['imageUrls'])
+    if image_count:
+        io.log(f"Found {image_count} Amazon product photo(s)")
+    else:
+        io.log(
+            "Warning: no Amazon product photos were found; the page may be "
+            "blocked or use unsupported markup"
+        )
 
     # Carry-through values from bulk parser (if provided)
     if isinstance(custom_specifics, dict) and custom_specifics:
@@ -547,21 +625,6 @@ def scrape_amazon(url: str, note: str = "", quantity: Optional[int] = None, cust
             prod_info_dict['quantity'] = int(quantity)
         except Exception:
             pass
-
-    # Attempt to generate item specifics using Gemini AI (if available)
-    try:
-        from gemini_helper import suggest_item_specifics_with_gemini
-
-        try:
-            generated = suggest_item_specifics_with_gemini(prod_info_dict, io=io)
-            if isinstance(generated, dict) and generated:
-                prod_info_dict['generatedSpecifics'] = generated
-        except Exception as exc:
-            io.log(f"Gemini generation error: {exc}")
-    except Exception as e:
-        # gemini_helper not present or failed to import; skip gracefully
-        print(f"Gemini generation error: {e}")
-        pass
 
     io.log("Amazon scrape complete")
     return prod_info_dict

@@ -389,7 +389,31 @@ def _list_on_ebay_impl(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
             ebayQuantity = 1
     seller_note = str(data.get('sellerNote', '') or "").strip()
 
-    image_urls_array = data.get('imageUrls', []) or []
+    raw_image_urls = data.get('imageUrls', []) or []
+    if isinstance(raw_image_urls, str):
+        raw_image_urls = [raw_image_urls]
+    elif not isinstance(raw_image_urls, (list, tuple)):
+        raw_image_urls = []
+
+    image_urls_array = []
+    seen_image_urls = set()
+    for value in raw_image_urls:
+        if not isinstance(value, str):
+            continue
+        url = value.strip()
+        if not re.match(r"^https?://", url, re.IGNORECASE):
+            continue
+        if url not in seen_image_urls:
+            seen_image_urls.add(url)
+            image_urls_array.append(url)
+
+    if not image_urls_array:
+        message = (
+            "No product photos were extracted from Amazon. Re-scrape the item "
+            "before listing; eBay requires at least one photo."
+        )
+        io.log(f"Listing stopped: {message}")
+        return {"ok": False, "error": "missing_images", "message": message}
 
     # --- HTML Description ---
     # --- HTML Description ---
