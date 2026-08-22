@@ -4,6 +4,7 @@ import json
 import os
 import re
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from typing import Dict, Any
 from dotenv import load_dotenv
@@ -27,6 +28,7 @@ load_dotenv()
 OPEN_LISTING_PAGE = os.getenv("OPEN_LISTING_PAGE", "edit").strip().lower()
 EBAY_MEDIA_IMAGE_ENDPOINT = "https://apim.ebay.com/commerce/media/v1_beta/image/create_image_from_url"
 EBAY_MEDIA_REQUEST_TIMEOUT_SECONDS = 60
+EBAY_IMAGE_UPLOAD_WORKERS = 8
 
 
 class EbayImageHostingError(RuntimeError):
@@ -127,10 +129,31 @@ def _host_images_on_ebay(source_urls: list[str], user_token: str, io: IOBridge) 
     distinct_urls = list(dict.fromkeys(source_urls))
     mapping: dict[str, str] = {}
     total = len(distinct_urls)
-    io.log(f"Copying {total} image(s) to eBay Picture Services…")
-    for index, source_url in enumerate(distinct_urls, start=1):
-        io.log(f"Hosting image {index}/{total} on eBay…")
-        mapping[source_url] = _upload_image_to_ebay(source_url, user_token)
+    if not total:
+        return mapping
+
+    worker_count = min(EBAY_IMAGE_UPLOAD_WORKERS, total)
+    io.log(
+        f"Copying {total} image(s) to eBay Picture Services "
+        f"with {worker_count} parallel upload(s)…"
+    )
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="ebay-image") as executor:
+        futures = {
+            executor.submit(_upload_image_to_ebay, source_url, user_token): source_url
+            for source_url in distinct_urls
+        }
+        completed = 0
+        try:
+            for future in as_completed(futures):
+                source_url = futures[future]
+                mapping[source_url] = future.result()
+                completed += 1
+                io.log(f"Hosted {completed}/{total} image(s) on eBay…")
+        except Exception:
+            for pending in futures:
+                pending.cancel()
+            raise
+
     io.log(f"All {total} image(s) are hosted by eBay.")
     return mapping
 
