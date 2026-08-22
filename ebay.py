@@ -20,10 +20,155 @@ from CentralFunctions import (
 )
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 load_dotenv()
 
 OPEN_LISTING_PAGE = os.getenv("OPEN_LISTING_PAGE", "edit").strip().lower()
+EBAY_MEDIA_IMAGE_ENDPOINT = "https://apim.ebay.com/commerce/media/v1_beta/image/create_image_from_url"
+EBAY_MEDIA_REQUEST_TIMEOUT_SECONDS = 60
+
+
+class EbayImageHostingError(RuntimeError):
+    """Raised when an image cannot be copied to eBay Picture Services."""
+
+    def __init__(self, message: str, source_url: str):
+        super().__init__(message)
+        self.source_url = source_url
+
+
+def _is_ebay_hosted_image_url(url: str) -> bool:
+    """Return whether a URL already points at eBay's image CDN."""
+    try:
+        hostname = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return hostname == "ebayimg.com" or hostname.endswith(".ebayimg.com")
+
+
+def _ebay_rest_error_message(response: requests.Response) -> str:
+    """Extract an actionable message from an eBay REST API error response."""
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        payload = None
+
+    messages = []
+    if isinstance(payload, dict):
+        errors = payload.get("errors", [])
+        if isinstance(errors, dict):
+            errors = [errors]
+        if isinstance(errors, list):
+            for error in errors:
+                if not isinstance(error, dict):
+                    continue
+                message = error.get("longMessage") or error.get("message")
+                if message:
+                    error_id = error.get("errorId")
+                    messages.append(f"{message} (error {error_id})" if error_id else str(message))
+
+        fallback = payload.get("error_description") or payload.get("message")
+        if fallback and not messages:
+            messages.append(str(fallback))
+
+    if messages:
+        return "; ".join(messages)
+
+    text = str(getattr(response, "text", "") or "").strip()
+    return text[:500] if text else f"HTTP {response.status_code}"
+
+
+def _upload_image_to_ebay(source_url: str, user_token: str) -> str:
+    """Copy one externally hosted image to eBay Picture Services (EPS)."""
+    if _is_ebay_hosted_image_url(source_url):
+        return source_url
+
+    headers = {
+        "Authorization": f"Bearer {user_token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    try:
+        response = requests.post(
+            EBAY_MEDIA_IMAGE_ENDPOINT,
+            headers=headers,
+            json={"imageUrl": source_url},
+            timeout=EBAY_MEDIA_REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise EbayImageHostingError(f"Could not contact eBay Picture Services: {exc}", source_url) from exc
+
+    if response.status_code != 201:
+        detail = _ebay_rest_error_message(response)
+        raise EbayImageHostingError(
+            f"eBay Picture Services rejected the image: {detail}",
+            source_url,
+        )
+
+    try:
+        payload = response.json()
+    except (ValueError, TypeError) as exc:
+        raise EbayImageHostingError(
+            "eBay Picture Services returned an invalid response.",
+            source_url,
+        ) from exc
+
+    ebay_url = payload.get("imageUrl") if isinstance(payload, dict) else None
+    if not isinstance(ebay_url, str) or not _is_ebay_hosted_image_url(ebay_url):
+        raise EbayImageHostingError(
+            "eBay Picture Services did not return an eBay-hosted image URL.",
+            source_url,
+        )
+    return ebay_url.strip()
+
+
+def _host_images_on_ebay(source_urls: list[str], user_token: str, io: IOBridge) -> dict[str, str]:
+    """Upload distinct source URLs to EPS and return source-to-eBay URL mappings."""
+    distinct_urls = list(dict.fromkeys(source_urls))
+    mapping: dict[str, str] = {}
+    total = len(distinct_urls)
+    io.log(f"Copying {total} image(s) to eBay Picture Services…")
+    for index, source_url in enumerate(distinct_urls, start=1):
+        io.log(f"Hosting image {index}/{total} on eBay…")
+        mapping[source_url] = _upload_image_to_ebay(source_url, user_token)
+    io.log(f"All {total} image(s) are hosted by eBay.")
+    return mapping
+
+
+def _description_image_urls(html: str) -> list[str]:
+    """Collect externally hosted image sources from listing-description HTML."""
+    if not html:
+        return []
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    urls = []
+    for image in soup.find_all("img"):
+        source_url = str(image.get("src", "") or "").strip()
+        if re.match(r"^https://", source_url, re.IGNORECASE):
+            urls.append(source_url)
+    return list(dict.fromkeys(urls))
+
+
+def _replace_description_image_urls(html: str, hosted_urls: dict[str, str]) -> str:
+    """Replace description image sources and discard alternate external sources."""
+    if not html:
+        return html
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    for image in list(soup.find_all("img")):
+        source_url = str(image.get("src", "") or "").strip()
+        ebay_url = hosted_urls.get(source_url)
+        if ebay_url:
+            image["src"] = ebay_url
+            # Prevent lazy-loading/srcset attributes from retaining an Amazon URL.
+            for attribute in ("srcset", "data-src", "data-old-hires", "data-a-dynamic-image"):
+                image.attrs.pop(attribute, None)
+        elif not _is_ebay_hosted_image_url(source_url):
+            # Do not leave an externally hosted image in the final eBay description.
+            image.extract()
+    return "".join(str(child) for child in soup.contents).strip()
 
 
 def _build_listing_open_url(item_id: str) -> str:
@@ -401,7 +546,7 @@ def _list_on_ebay_impl(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
         if not isinstance(value, str):
             continue
         url = value.strip()
-        if not re.match(r"^https?://", url, re.IGNORECASE):
+        if not re.match(r"^https://", url, re.IGNORECASE):
             continue
         if url not in seen_image_urls:
             seen_image_urls.add(url)
@@ -562,6 +707,29 @@ def _list_on_ebay_impl(data: Dict[str, Any], io: IOBridge) -> Dict[str, Any]:
         io.log(
             f"ERROR: Token file (ebay_tokens.json) is missing or malformed: {e}. Use the GUI to initialize tokens first.")
         return {"ok": False, "error": "missing_tokens"}
+
+    # Copy gallery and description images into eBay Picture Services before
+    # creating the listing. The AddItem payload therefore contains eBay-hosted
+    # URLs instead of depending on Amazon (or another external image host).
+    description_image_urls = _description_image_urls(html_description)
+    try:
+        hosted_image_urls = _host_images_on_ebay(
+            image_urls_array + description_image_urls,
+            user_token,
+            io,
+        )
+    except EbayImageHostingError as exc:
+        message = str(exc)
+        io.log(f"Listing stopped: {message}")
+        return {
+            "ok": False,
+            "error": "image_upload_failed",
+            "message": message,
+            "source_url": exc.source_url,
+        }
+
+    image_urls_array = [hosted_image_urls[url] for url in image_urls_array]
+    html_description = _replace_description_image_urls(html_description, hosted_image_urls)
 
     # Category & specifics discovery
     categoryTree = categoryTreeID(applicationToken)
